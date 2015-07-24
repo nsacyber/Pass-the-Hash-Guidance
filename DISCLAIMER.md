@@ -1,25 +1,3 @@
-# Pass the Hash Guidance
-
-## About This Project
-
-This project hosts scripts for aiding administrators in implementing Pass the Hash mitigations. 
-
-
-The PTHTools library contains the following cmdlets (use Get-Help on the cmdlets to get more information):  
-* Find-PotentialPtHEvents  
-* Invoke-DenyNetworkAccess  
-* Edit-AllLocalAccountPasswords  
-* Get-LocalAccountSummaryOnDomain  
-
-## Paper
-[Reducing the Effectiveness of Pass the Hash](https://www.nsa.gov/ia/_files/app/Reducing_the_Effectiveness_of_Pass-the-Hash.pdf)
-
-## License
-This work was prepared by an U.S. Government employee and, therefore, is excluded from copyright by Section 105 of the Copyright Act of 1976.
-
-Copyright and Related Rights in the Work worldwide are waived through the [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) [Universal license](https://creativecommons.org/publicdomain/zero/1.0/legalcode).
-
-## Disclaimer
 This Work is provided "as is." Any express or implied warranties, including but not limited to, the
 implied warranties of merchantability and fitness for a particular purpose are disclaimed. In no event
 shall the United States Government be liable for any direct, indirect, incidental, special, exemplary or
