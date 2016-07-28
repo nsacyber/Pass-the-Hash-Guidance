@@ -1,4 +1,3 @@
-#ensure powershell runs on at least version 3
 #requires -version 3.0
 
 Import-Module multithreading -force
@@ -10,273 +9,234 @@ import-module password -force
 import-module windows\securestring -force
 import-module windows\filesystem -force
 
-
-
-
-
-function Find-PotentialPtHEvents{
+function Find-PotentialPtHEvents(){
 <#
-.SYNOPSIS
+    .SYNOPSIS
+    Determines if a network logon meets specific criteria that may have been a PtH login.
 
-Goes through the Windows Vista+ event logs and determines if a network
-logon meets specific criteria that may have been a PtH login.
+    .DESCRIPTION
+    Find-PotentialPtHEvents iterates over all non-domain controllers registered within active directory and queries their event logs for specific network logon criteria that PtH logins meet. The criteria is as follows:
+        network logon type == 3
+        domain != domain name
+        authentication mechanism == NTLM
+        username != ANONYMOUS
 
-.DESCRIPTION
+    Each computer is contacted in parallel.  The current model pushes all of the work to the individual domain-joined machines from the invoking process. The invoker waits until the invokee finishes and returns the results. The length of time the process should take is dependent on the size of the event logs and whether or not some of the machines that are domain-joined are down.  In the case that a machine is down, the program will wait until a timeout occurs.   
 
-Find-PotentialPtHEvents iterates over all non-domain controllers registered
-within active directory and queries their event logs for specific network logon
-criteria that PtH logins meet.  The criteria is as follows:
+    .PARAMETER ndays
+    The number of days back to go in the event log.
 
-network logon type == 3
-domain != domain name
-authentication mechanism == NTLM
-username != ANONYMOUS
+    .PARAMETER interactive
+    Returns the results to the pipeline interactively instead of pretty printing them to the screen.
 
-Each computer is contacted in parallel.  The current model pushes all of the work
-to the individual domain-joined machines from the invoking process.  The invoker
-waits until the invokee finishes and returns the results.  The length of time
-the process should take is dependent on the size of the event logs and whether or not
-some of the machines that are domain-joined are down.  In the case that a machine is down,
-the program will wait until a timeout occurs.   
+    .EXAMPLE
+    Find-PotentialPtHEvents
 
-.PARAMETER ndays
+    Looks for PtH behavior in the event logs for the last 7 days.
 
-The number of days back to go in the event log.
+    .EXAMPLE
 
-.PARAMETER interactive
+    Find-PotentialPtHEvents -ndays 30
 
-Returns the results to the pipeline interactively instead of pretty printing them to the screen.
-
-.EXAMPLE
-
-Find-PotentialPtHEvents
-
-Looks for PtH behavior in the event logs for the last 7 days.
-
-.EXAMPLE
-
-Find-PotentialPtHEvents -ndays 30
-
-Looks for PtH behavior in the event logs for the last 30 days.
-
+    Looks for PtH behavior in the event logs for the last 30 days.
 #>
-	[CmdletBinding(DefaultParameterSetName="All")]
-	param(
-		[Parameter(Mandatory=$FALSE, ParameterSetName="All")]
-		[Parameter(Mandatory=$FALSE, ParameterSetName="Single")]
-			[int]$ndays=7,
-		[Parameter(Mandatory=$FALSE, ParameterSetName="All")]
-		[Parameter(Mandatory=$FALSE, ParameterSetName="Single")]
-			[switch]$interactive,
-		
-		[Parameter(Mandatory=$TRUE, ParameterSetName="Single")]
-			[switch]$single,
-		[Parameter(Mandatory=$TRUE, ParameterSetName="Single", ValueFromPipeline=$TRUE, position=1)]
-			[string]$computerName,
-		[Parameter(Mandatory=$FALSE, ParameterSetName="All")]
-		[Parameter(Mandatory=$FALSE, ParameterSetName="Single")]
-			[string]$channelName="Security"
-	)
-	BEGIN{
-		Test-Assert {(Test-ModuleExists multithreading) -eq $TRUE}
-		$script:NSECS_IN_1_HOUR = 3600000
-		$script:NSECS_IN_1_DAY = $script:NSECS_IN_1_HOUR * 24
-	}
-	PROCESS{
-		$mgr = New-ParallelTaskManager
-		try
-		{
-			$results = @{}
-			
-			$servers = $NULL
-			if($PSCmdlet.ParameterSetName -eq "All"){
-		    	$servers = @(Get-DomainComputersSansDomainControllers)
-		    }
-			else{
-				$servers = $computerName
-			}
-			
-			$task = {
-				param(
-					[Parameter(Mandatory=$TRUE)]
-						[string]$server, 
-					[Parameter(Mandatory=$TRUE)]
-						[string]$channelName,
-					[Parameter(Mandatory=$TRUE)] 
-						[int64]$nsecs
-				)
-				#$script:winXPLogonEvents = @{540="Success";528="Success";529="Failure"; 530="Failure"; 531="Failure"; 532="Failure"; 533="Failure"; 534="Failure"; 535="Failure";536="Failure";537="Failure";539="Failure"; }
-				$script:winVistaPlusLogonEvents = @{4624="Success";4625="Failure"}
-	
-				function New-Result([string]$hostname, [string]$os, [DateTime]$TimeCreated, [int]$id, [string]$message, $event){
-					$result = "" | Select host, os, TimeCreated, Id, Message, Event
-					$result.host = $hostname
-					$result.os = $os
-					$result.timecreated = $timecreated
-					$result.id = $id
-					$result.message = $message
-					$result.event = $event
-					return $result
-				}
-	
-				$domain = (([System.DirectoryServices.ActiveDirectory.domain]::GetCurrentDomain()).name).split(".")[0].toupper() #get ~NETBIOS name, which is how the event log stores the domain name
-				$results = @()
-				$os = $NULL
-				try{
-		            $os = Get-WmiObject -class Win32_OperatingSystem -cn $server
-		            if($os){
-						#os will be null if Get-WMI fails...for any reason
-			            Switch -regex ($os.Version){
-							#used to support xp classic event logs.
-							#moving away from it in further development
-							"^6`.*"
-							{
-								#vista+
-								#silently continue to suppress the error that is thrown
-								#if no events were found meeting our criteria
-								#$events = @(Get-WinEvent -ErrorAction SilentlyCOntinue -computerName $server -FilterXML "<QueryList><Query Id='0' Path='Security'><Select Path='Security'>*[(System[Provider[@Name='Microsoft-Windows-Security-Auditing']]) and (System[TimeCreated[timediff(@SystemTime) &lt;= $nsecs]]) and (System[EventID=4624] or System[EventID=4625]) and (EventData[Data[@Name='LogonType']='3' and Data[@Name='AuthenticationPackageName'] ='NTLM' and Data[@Name='TargetDomainName'] != '$domain' and Data[@Name='TargetUserName'] != 'ANONYMOUS LOGON' and Data[@Name='TargetUserName'] != '-']) ]</Select></Query></QueryList>")
-								$events = @(Get-WinEvent -ErrorAction SilentlyCOntinue -computerName $server -FilterXML "<QueryList><Query Id='0' Path='$channelName'><Select Path='$channelName'>*[(System[Provider[@Name='Microsoft-Windows-Security-Auditing']]) and (System[TimeCreated[timediff(@SystemTime) &lt;= $nsecs]]) and (System[EventID=4624] or System[EventID=4625]) and (EventData[Data[@Name='LogonType']='3' and Data[@Name='AuthenticationPackageName'] ='NTLM' and Data[@Name='TargetDomainName'] != '$domain' and Data[@Name='TargetUserName'] != 'ANONYMOUS LOGON']) ]</Select></Query></QueryList>")
-								
-								foreach($event in $events){
-									$results += New-Result $server $os.version $event.timecreated $event.id $event.message $event
-								}
-								break
-			                }
-							DEFAULT
-							{
-								Write-Error "UNSUPPORTED Operating system: $($os.version)"
-							}
-			            }
-			    	}
-		        }
-		        catch{
-					Write-Error "Could not connect to server: $server"
-				}
-		        Write-Output $results
-		        
-			}
-			$nsecs = $script:NSECS_IN_1_DAY * $ndays
-			foreach ($server in $servers){
-				[void]$mgr.new_task($task, @($server, $channelName, $nsecs))
-			}
-			$results = $mgr.receive_alltasks()
-			 
-			if($interactive){
-				#return the results to the user
-				Write-Output $results
-			}
-			else{
-				#print out the results to the screen (Default)
-				$results | Sort-Object TimeCreated -descending | format-table host, os, timecreated, id, message
-				
-			} 
-		}
-		catch [System.Exception]
-		{
-		    Write-Host $_.Exception.Message
-		}
-		finally{
-			$mgr = $NULL
-		}
-	}
-	END{
-		
-	}
+    [CmdletBinding(DefaultParameterSetName="All")]
+    param(
+        [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
+        [Parameter(Mandatory=$FALSE, ParameterSetName="Single")]
+            [int]$ndays=7,
+        [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
+        [Parameter(Mandatory=$FALSE, ParameterSetName="Single")]
+            [switch]$interactive,
+        
+        [Parameter(Mandatory=$TRUE, ParameterSetName="Single")]
+            [switch]$single,
+        [Parameter(Mandatory=$TRUE, ParameterSetName="Single", ValueFromPipeline=$TRUE, position=1)]
+            [string]$computerName,
+        [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
+        [Parameter(Mandatory=$FALSE, ParameterSetName="Single")]
+            [string]$channelName="Security"
+    )
+    BEGIN{
+        Test-Assert {(Test-ModuleExists multithreading) -eq $TRUE}
+        $script:NSECS_IN_1_HOUR = 3600000
+        $script:NSECS_IN_1_DAY = $script:NSECS_IN_1_HOUR * 24
+    }
+    PROCESS{
+        $mgr = New-ParallelTaskManager
+        try {
+            $results = @{}
+            
+            $servers = $NULL
+            if($PSCmdlet.ParameterSetName -eq "All"){
+                $servers = @(Get-DomainComputersSansDomainControllers)
+            }
+            else{
+                $servers = $computerName
+            }
+            
+            $task = {
+                param(
+                    [Parameter(Mandatory=$TRUE)]
+                        [string]$server, 
+                    [Parameter(Mandatory=$TRUE)]
+                        [string]$channelName,
+                    [Parameter(Mandatory=$TRUE)] 
+                        [int64]$nsecs
+                )
+                #$script:winXPLogonEvents = @{540="Success";528="Success";529="Failure"; 530="Failure"; 531="Failure"; 532="Failure"; 533="Failure"; 534="Failure"; 535="Failure";536="Failure";537="Failure";539="Failure"; }
+                $script:winVistaPlusLogonEvents = @{4624="Success";4625="Failure"}
+    
+                function New-Result([string]$hostname, [string]$os, [DateTime]$TimeCreated, [int]$id, [string]$message, $event){
+                    $result = "" | Select host, os, TimeCreated, Id, Message, Event
+                    $result.host = $hostname
+                    $result.os = $os
+                    $result.timecreated = $timecreated
+                    $result.id = $id
+                    $result.message = $message
+                    $result.event = $event
+                    return $result
+                }
+    
+                $domain = (([System.DirectoryServices.ActiveDirectory.domain]::GetCurrentDomain()).name).split(".")[0].toupper() #get ~NETBIOS name, which is how the event log stores the domain name
+                $results = @()
+                $os = $NULL
+                try{
+                    $os = Get-WmiObject -class Win32_OperatingSystem -cn $server
+                    if($os){
+                        #os will be null if Get-WMI fails...for any reason
+                        Switch -regex ($os.Version){
+                            #used to support xp classic event logs.
+                            #moving away from it in further development
+                            "^6`.*"
+                            {
+                                #vista+
+                                #silently continue to suppress the error that is thrown
+                                #if no events were found meeting our criteria
+                                #$events = @(Get-WinEvent -ErrorAction SilentlyCOntinue -computerName $server -FilterXML "<QueryList><Query Id='0' Path='Security'><Select Path='Security'>*[(System[Provider[@Name='Microsoft-Windows-Security-Auditing']]) and (System[TimeCreated[timediff(@SystemTime) &lt;= $nsecs]]) and (System[EventID=4624] or System[EventID=4625]) and (EventData[Data[@Name='LogonType']='3' and Data[@Name='AuthenticationPackageName'] ='NTLM' and Data[@Name='TargetDomainName'] != '$domain' and Data[@Name='TargetUserName'] != 'ANONYMOUS LOGON' and Data[@Name='TargetUserName'] != '-']) ]</Select></Query></QueryList>")
+                                $events = @(Get-WinEvent -ErrorAction SilentlyCOntinue -computerName $server -FilterXML "<QueryList><Query Id='0' Path='$channelName'><Select Path='$channelName'>*[(System[Provider[@Name='Microsoft-Windows-Security-Auditing']]) and (System[TimeCreated[timediff(@SystemTime) &lt;= $nsecs]]) and (System[EventID=4624] or System[EventID=4625]) and (EventData[Data[@Name='LogonType']='3' and Data[@Name='AuthenticationPackageName'] ='NTLM' and Data[@Name='TargetDomainName'] != '$domain' and Data[@Name='TargetUserName'] != 'ANONYMOUS LOGON']) ]</Select></Query></QueryList>")
+                                
+                                foreach($event in $events){
+                                    $results += New-Result $server $os.version $event.timecreated $event.id $event.message $event
+                                }
+                                break
+                            }
+                            DEFAULT
+                            {
+                                Write-Error "UNSUPPORTED Operating system: $($os.version)"
+                            }
+                        }
+                    }
+                }
+                catch{
+                    Write-Error "Could not connect to server: $server"
+                }
+                Write-Output $results           
+            }
+            $nsecs = $script:NSECS_IN_1_DAY * $ndays
+            foreach ($server in $servers){
+                [void]$mgr.new_task($task, @($server, $channelName, $nsecs))
+            }
+            $results = $mgr.receive_alltasks()
+
+            if($interactive){
+                #return the results to the user
+                Write-Output $results
+            }
+            else{
+                #print out the results to the screen (Default)
+                $results | Sort-Object TimeCreated -descending | format-table host, os, timecreated, id, message
+                
+            } 
+        }
+        catch [System.Exception]
+        {
+            Write-Host $_.Exception.Message
+        }
+        finally{
+            $mgr = $NULL
+        }
+    }
+    END{}
 }
 
-
-
 function Disable-NetworkLogonsForGroup(){
-	param(
-		[CmdletBinding()]
-		
-		[Parameter(Mandatory=$FALSE, ValueFromPipeline=$TRUE, position=1)]
-			[string]$group,
-		[Parameter(Mandatory=$FALSE)]
-			[string]$computerName = $env:COMPUTERNAME,
+    param(
+        [CmdletBinding()]
+        
+        [Parameter(Mandatory=$FALSE, ValueFromPipeline=$TRUE, position=1)]
+            [string]$group,
         [Parameter(Mandatory=$FALSE)]
-		    [AllowEmptyString()]
-			[string]$description=""
-	)
-	BEGIN{}
-	
-	PROCESS{
-		if(Test-GroupExists -local -name $group -computerName $computerName){
+            [string]$computerName = $env:COMPUTERNAME,
+        [Parameter(Mandatory=$FALSE)]
+            [AllowEmptyString()]
+            [string]$description=""
+    )
+    BEGIN{}
+
+    PROCESS{
+        if(Test-GroupExists -local -name $group -computerName $computerName){
             #could also do it this way.
             #Get-Group -local $group | Get-GroupMembers -local | foreach{Remove-GroupMember -local -group $group -user $_.name}
-			Remove-Group -local -name $group -computerName $computerName
-		}
-	
-		$adsiGroup = (New-Group -local -name $group -computerName $computerName -description $description)
+            Remove-Group -local -name $group -computerName $computerName
+        }
+
+        $adsiGroup = (New-Group -local -name $group -computerName $computerName -description $description)
         if((Test-ADSISuccess $adsiGroup) -eq $TRUE){
-		    $adminGroupName = Get-LocalAdminGroupName -computerName $computerName
-	        Get-Group -local -computerName $computerName $adminGroupName | Get-GroupMembers -local -computerName $computerName | foreach{(Add-GroupMember -local -group $group -user $_.name -computerName $computerName)} | Out-Null
+            $adminGroupName = Get-LocalAdminGroupName -computerName $computerName
+            Get-Group -local -computerName $computerName $adminGroupName | Get-GroupMembers -local -computerName $computerName | foreach{(Add-GroupMember -local -group $group -user $_.name -computerName $computerName)} | Out-Null
             Write-Host "Successfully added local administrators to group $group on $computerName"
         }
-		
-	}
-	
-	END{}
-								
+    }
+  
+    END{}                              
 }
 
 
 function Invoke-DenyNetworkAccess(){
 <#
-	#xxx
     .SYNOPSIS
-    
-    Utility method for removing denying network access as described in the PTH Paper
-
-    Puts all local admins into a specific group.
+    Adds all local administrators to a specific group that can be used to deny them network access.
     
     .DESCRIPTION
-    
-    Interfaces with the cmdlet Disable-NetworkLogonsForGroup to provide the guidance
-    given in the PtH paper.  If the user wants a different group name, then
-    they can call Disable-NetworkLogonsForGroup expclitly and provide
-    a custom group name.
+    Interfaces with the cmdlet Disable-NetworkLogonsForGroup to provide the guidance given in the PtH paper. If the user wants a different group name, then they can call Disable-NetworkLogonsForGroup expclitly and provide a custom group name.
     
     .PARAMETER group
-    [string]: The group name to put all local admins in.
+    [string] The group name to put all local admins in.
 
     .PARAMETER computername
-    [string]: The local computername to create the new group on.
+    [string] The local computername to create the new group on.
 
     .PARAMETER description
-    [string]: The description of the group.
+    [string] The description of the group.
     
     .INPUTS
-    [string]: See <Computername>
+    [string] See <Computername>
     
     .OUTPUTS
     None.
 
-    .EXAMPLE
-    
+    .EXAMPLE  
     Invoke-DenyNetworkAccess -group "DenyNetworkAccess" -computerName "host1" -description "Group used to remove network access to all local administrator."
-#>			
-	param(
-		[CmdletBinding()]
-		
-		[Parameter(Mandatory=$FALSE)]
-			[string]$group="DenyNetworkAccess",
-		[Parameter(Mandatory=$FALSE, ValueFromPipeline=$TRUE, position=1)]
-			[string]$computerName = $env:COMPUTERNAME,
-		[Parameter(Mandatory=$FALSE)]
-		    [AllowEmptyString()]
-			[string]$description=""
-
-			
-	)
-	BEGIN{}
-	
-	PROCESS{
-		Disable-NetworkLogonsForGroup -group $group -computerName $computerName	-description $description
-	}
-	
-	END{}
-								
+#>            
+    param(
+        [CmdletBinding()]
+        
+        [Parameter(Mandatory=$FALSE)]
+            [string]$group="DenyNetworkAccess",
+        [Parameter(Mandatory=$FALSE, ValueFromPipeline=$TRUE, position=1)]
+            [string]$computerName = $env:COMPUTERNAME,
+        [Parameter(Mandatory=$FALSE)]
+            [AllowEmptyString()]
+            [string]$description=""       
+    )
+    BEGIN{}
+    
+    PROCESS{
+        Disable-NetworkLogonsForGroup -group $group -computerName $computerName    -description $description
+    }
+    
+    END{}                               
 }
 
 
@@ -287,374 +247,312 @@ $script:MIN_REQUIRED_DISK_SPACE = 25mb
 
 function Edit-AllLocalAccountPasswords(){
 <#
+    .SYNOPSIS
+    Changes a local account password for an inputted list of domain-joined machines <machinesFilePath> or by automatically detecting all of the registered machines on the domain.  
 
-.SYNOPSIS
+    .DESCRIPTION
+    This program changes a local account password for an inputted list of domain-joined machines <machinesFilePath> or by automatically detecting all of the registered machines on the domain. The length of the password is configurable by the <minPasswordLength> and <maxPasswordLength> parameters. If the -machinesFilePath switch is used, the program expects a file listing the hostnames, one on each line. Passwords are generated using the RNGCryptoServiceProvider .Net object. The local account (denoted by <localAccountName>) password is changed via the IADsUser interface.  If for any reason, the password change is unsuccessful, then the program will notify the user which machine names failed to have the account's password changed. Upon completion, the machine will have written a tab delimited file to the path of <outFilePath> with each line consisting of: <machineName> <localAccountName> <newPassword>. By default, the output must be saved to a USB drive, but this can be disabled with setting forceUSBKeyUsage to $FALSE.  It is recommended to run this script with a domain account.
 
-Unique password mitigation described in PTH paper.
+    .PARAMETER machinesFilePath
+    The path to a list of domain-joined machines to use for the password changing. The file is line delimited with each line consisting of a domain-joined machinename.
 
-This program changes a local account password for an inputted list of domain-joined machines
-<machinesFilePath> or by automatically detecting all of the registered machines on the domain.  
+    .PARAMETER minPasswordLength
+    The minimum password length (default value of 14) to use for the creation of the new password. Only used if random password is selected.
 
-.DESCRIPTION
+    .PARAMETER maxPasswordLength
+    The maximum password length (default value of 25) to use for the creation of the new password. Only used if random password is selected.
 
-This program changes a local account password for an inputted list of domain-joined machines
-<machinesFilePath> or by automatically detecting all of the registered machines on the domain.
-The length of the password is configurable by the <minPasswordLength> and <maxPasswordLength> parameters.
-If the -machinesFilePath switch is used, the program expects a file listing the hostnames,
-one on each line. Passwords are generated using the RNGCryptoServiceProvider .Net object.
-The local account (denoted by <localAccountName>) password is changed via the IADsUser
-interface.  If for any reason, the password change is unsuccessful, then the program will notify the user
-which machine names failed to have the account's password changed.  Upon completion,
-the machine will have written a tab delimited file to the path of <outFilePath> with each
-line consisting of: <machineName> <localAccountName> <newPassword>. By default,
-the output must be saved to a USB drive, but this can be disabled with setting 
-forceUSBKeyUsage to $FALSE.  It is recommended to run this script with a domain account.
+    .PARAMETER maxThreads
+    The maximum number of threads to attach to the runspace.
 
-.PARAMETER machinesFilePath
+    .PARAMETER forceUSBKeyUsage
+    Have the program ensure that the <outFilePath> location is on a USB drive (default value of true).
 
-The path to a list of domain-joined machines to use for the password changing.
-The file is line delimited with each line consisting of a domain-joined machinename.
+    .PARAMETER localAccountName
+    The username for which the user desires to change the password.  
 
-.PARAMETER minPasswordLength
+    .PARAMETER outFilePath
+    The filename to use for writing the output (both successful and unsuccessful password changes).
 
-The minimum password length (default value of 14) to use for the creation of the new password.
-(Only used if random password is selected.)
+    .NOTES
+    Running this cmdlet in multithreaded mode will not get you realtime feedback to stdout.  Check the passwords.out and machinesNotChanged.out files to see the progress.  machinesNotChanged.out does not contain any machines that are unavailable, which are filtered out by Test-IsComputerAlive or Get-AllAliveComputers.
 
-.PARAMETER maxPasswordLength
+    .EXAMPLE
+    Edit-AllLocalAccountPasswords -localAccountName test -outFilePath .\passwords.out
 
-The maximum password length (default value of 25) to use for the creation of the new password. 
-(Only used if random password is selected.)
+    Change the password for the local account name "test", in single threaded mode, and writing the output to the file passwords.out in the current working directory, where the current working directory must be on a usb drive. 
 
-.PARAMETER maxThreads
+    .EXAMPLE
+    Edit-AllLocalAccountPasswords -localAccountName test -outFilePath .\passwords.out -forceUSBKeyUsage $FALSE
 
-The maximum number of threads to attach to the runspace.
-
-.PARAMETER forceUSBKeyUsage
-
-Have the program ensure that the <outFilePath> location is on a USB drive (default value of true).
-
-.PARAMETER localAccountName
-
-The username for which the user desires to change the password.  
-
-.PARAMETER outFilePath
-
-The filename to use for writing the output (both successful and unsuccessful password changes).
-
-
-.NOTES
-
-Running this cmdlet in multithreaded mode will not get you realtime feedback to stdout.  Check the passwords.out and machinesNotChanged.out files
-to see the progress.  machinesNotChanged.out does not contain any machines that are unavailable, which are filtered out by Test-IsComputerAlive or Get-AllAliveComputers.
-
-
-.EXAMPLE
-Edit-AllLocalAccountPasswords -localAccountName test -outFilePath .\passwords.out
-
-Change the password for the local account name "test", in single threaded mode,
-and writing the output to the file passwords.out in the current working directory,
-where the current working directory must be on a usb drive. 
-
-.EXAMPLE
-Edit-AllLocalAccountPasswords -localAccountName test -outFilePath .\passwords.out -forceUSBKeyUsage $FALSE
-
-Change the password for the local accountname test and write the file to passwords.out
-in the current working directory, where the current workign directory does not require
-to be on a usb drive.
-
-  
+    Change the password for the local accountname test and write the file to passwords.out in the current working directory, where the current workign directory does not require to be on a usb drive. 
 #>
-    [CmdletBinding(DefaultParameterSetName="All")]									
-	param(
-		[Parameter(Mandatory=$FALSE, ParameterSetName="All")]
+    [CmdletBinding(DefaultParameterSetName="All")]                                    
+    param(
+        [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
         [Parameter(Mandatory=$FALSE, ParameterSetName="multithreading")]
-			[switch]$fast,
+            [switch]$fast,
 
         [Parameter(Mandatory=$TRUE, ParameterSetName="multithreading")]
-			[switch]$multithreaded,
+            [switch]$multithreaded,
     
         [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
         [Parameter(Mandatory=$FALSE, ParameterSetName="multithreading")]    
-			[string]$machinesFilePath,
+            [string]$machinesFilePath,
 
 
         [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
         [Parameter(Mandatory=$FALSE, ParameterSetName="multithreading")]
-			[int]$minPasswordLength = 14,
+            [int]$minPasswordLength = 14,
 
         [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
         [Parameter(Mandatory=$FALSE, ParameterSetName="multithreading")]
-			[int]$maxPasswordLength = 25,
+            [int]$maxPasswordLength = 25,
 
         [Parameter(Mandatory=$FALSE, ParameterSetName="multithreading")]
-			[int]$maxThreads = 20,
+            [int]$maxThreads = 20,
 
         [Parameter(Mandatory=$FALSE, ParameterSetName="All")]
         [Parameter(Mandatory=$FALSE, ParameterSetName="multithreading")]
-			[bool]$forceUSBKeyUsage = $TRUE,
+            [bool]$forceUSBKeyUsage = $TRUE,
 
         [Parameter(Mandatory=$TRUE, ParameterSetName="All")]
         [Parameter(Mandatory=$TRUE, ParameterSetName="multithreading")]
-			[string]$localAccountName,
+            [string]$localAccountName,
         
         [Parameter(Mandatory=$TRUE, ParameterSetName="All")]
         [Parameter(Mandatory=$TRUE, ParameterSetName="multithreading")]
-			[string]$outFilePath
-		
-	)
-	
-	BEGIN{
-		$machinesArray = $NULL
+            [string]$outFilePath  
+    )
+    
+    BEGIN{
+        $machinesArray = $NULL
         $available = $NULL
-		$unavailable = $NULL
-		$errors = $NULL
-		
-
-		if($forceUSBKeyUsage -eq $TRUE){
-			if((Test-ForceUSBKeyUsage $outFilePath) -eq $FALSE){
+        $unavailable = $NULL
+        $errors = $NULL
+        
+        if($forceUSBKeyUsage -eq $TRUE){
+            if((Test-ForceUSBKeyUsage $outFilePath) -eq $FALSE){
                 #abort program.  The outfile path is not on a removable device
                 throw "The outfile path is not on a removable device"
             }
-            
-		}
-		if((Test-SufficientDiskSpace $outFilePath $script:MIN_REQUIRED_DISK_SPACE) -eq $FALSE){
-			#see if volume contains enough space
-			throw "disk does not have enough free space to save password file"
-		}
-		
-		
-		
-		if(-not ([System.String]::IsNullOrEmpty($machinesFilePath))){
+        }
+        if((Test-SufficientDiskSpace $outFilePath $script:MIN_REQUIRED_DISK_SPACE) -eq $FALSE){
+            #see if volume contains enough space
+            throw "disk does not have enough free space to save password file"
+        }
+
+        if(-not ([System.String]::IsNullOrEmpty($machinesFilePath))){
             if((Test-Path $machinesFilePath) -eq $FALSE){
                 throw "$machinesFilePath does not exist"
             }
-			$machinesArray = Get-Content $machinesFilePath
-		}
-		else{
-			$machinesArray = @(Get-DomainComputersSansDomainControllers)
-		}
-		if($fast){
+            $machinesArray = Get-Content $machinesFilePath
+        }
+        else{
+            $machinesArray = @(Get-DomainComputersSansDomainControllers)
+        }
+        if($fast){
             if($multithreaded){
                 $available = Get-AllComputersAlive -multithreaded -fast $machinesArray
                 $unavailable = Get-SetDifference $machinesArray $available
             }
             else{
                 $unavailable = @()
-			    $tempMachinesArray = @()
-			    foreach($m in $machinesArray){
-				    if(Test-IsComputerAlive -fast $m){
-					    $tempMachinesArray += $m
-				    }
-				    else{
-					    $unavailable += $m
-				    }
-			    }
-			    $available = $tempMachinesArray
-			    $tempMachinesArray = $NULL
-			    #===================================================================
-			    # Write-Host "************Unavailable**************"
-			    # $unavailable | foreach{Write-Host $_}
-			    # Write-Host "*************************************"
-			    #===================================================================
+                $tempMachinesArray = @()
+                foreach($m in $machinesArray){
+                    if(Test-IsComputerAlive -fast $m){
+                        $tempMachinesArray += $m
+                    }
+                    else{
+                        $unavailable += $m
+                    }
+                }
+                $available = $tempMachinesArray
+                $tempMachinesArray = $NULL
+                #===================================================================
+                # Write-Host "************Unavailable**************"
+                # $unavailable | foreach{Write-Host $_}
+                # Write-Host "*************************************"
+                #===================================================================
             }
-		}
+        }
         else{
             $available = $machinesArray
         }
-		#this should resolve to the locally defined Get-FunctionParameters
-		$fargs = Get-FunctionParametersPTHTools "Invoke-PasswordChange"
-		$fargs["multithreaded"] = $multithreaded.ispresent
-		$fargs["machineNames"] = $available
-	}
-	PROCESS{
-		$menu =
+        #this should resolve to the locally defined Get-FunctionParameters
+        $fargs = Get-FunctionParametersPTHTools "Invoke-PasswordChange"
+        $fargs["multithreaded"] = $multithreaded.ispresent
+        $fargs["machineNames"] = $available
+    }
+    PROCESS{
+        $menu =
 @"
 `t1. Random passwords
 `t2. Salt passwords.
 `t3. Quit  
 "@
-		
-        
-		while($TRUE){
-			Write-Host $menu
-			$command = Read-Host "Enter command number"
-			switch($command){
-				1{
-					$fargs["random"] = [switch]$TRUE
-					[array]$errors = Invoke-PasswordChange @fargs
-					break
-				}
-							
-				2{
-					$fargs["salted"] = [switch]$TRUE
-					[array]$errors = Invoke-PasswordChange @fargs
-					break
-				}
-							
-				3{
-					break
-				}
-				default{
-					Write-Host "Invalid command $command"
-					break
-				}
-			}
-			if($unavailable -gt 0){
+
+        while($TRUE){
+            Write-Host $menu
+            $command = Read-Host "Enter command number"
+            switch($command){
+                1{
+                    $fargs["random"] = [switch]$TRUE
+                    [array]$errors = Invoke-PasswordChange @fargs
+                    break
+                }
+                            
+                2{
+                    $fargs["salted"] = [switch]$TRUE
+                    [array]$errors = Invoke-PasswordChange @fargs
+                    break
+                }
+                            
+                3{
+                    break
+                }
+                default{
+                    Write-Host "Invalid command $command"
+                    break
+                }
+            }
+            if($unavailable -gt 0){
                 #unavailable hosts are only determined if the -fast option is on, which filters boxes that aren't responding to conventional probes
                 Write-Host "`r`n*********Unavailable*************"
                 $unavailable | foreach{Write-Host $_}
                 Write-Host "****************************`r`n"
             }
-			if($errors.count -gt 0){ 
+            if($errors.count -gt 0){ 
                 #anything that fails during run-time
-				Write-Host "`r`n*********Errors*************"
-				$errors | foreach {Write-Host $_} 
-				Write-Host "****************************`r`n"
-			}
-			
-			
-			
-			break
-				
-			
-		}
-		
-	}
-	END{}								
-										
+                Write-Host "`r`n*********Errors*************"
+                $errors | foreach {Write-Host $_} 
+                Write-Host "****************************`r`n"
+            }
+                    
+            break                   
+        }   
+    }
+    END{}                                     
 }
 
 function Invoke-PasswordChange(){
-	[CmdletBinding()]
-	param(
-		[Parameter(Mandatory=$TRUE, ParameterSetName="Random")]
-			[switch]$random,
-		[Parameter(Mandatory=$TRUE, ParameterSetName="Salted")]
-			[switch]$salted,
-		[Parameter(Mandatory=$FALSE)]
-			[switch]$multithreaded,
-		[Parameter(Mandatory=$TRUE)]
-			[int]$minPasswordLength,
-		[Parameter(Mandatory=$TRUE)]
-			[int]$maxPasswordLength,
-		[Parameter(Mandatory=$FALSE)]
-			[int]$maxThreads,
-		[Parameter(Mandatory=$TRUE)]
-			[array]$machineNames,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$localAccountName,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$outFilePath
-	)
-								
-	$passwordsArray = @()
-	if($random){
-		#build up password array for random passwords
-		foreach($m in $machineNames){
-			$passwordLength = Get-Random -Minimum $minPasswordLength -Maximum ($maxPasswordLength+1); 
-			$passwordsArray += (New-RandomPassword -length $passwordLength)
-		}
-	}
-	else{
-		#build up password array for salted passwords
-	
-		#read in the password from the user
-		$password = Read-PasswordFromUser
-		
-		#prompt the user to see if they wanted the salt prepended or appended
-		do{
-			$cmd = (Read-Host "Enter location to place salt (p)repend or (a)ppend.").toLower()
-		}while(($cmd -ne "a") -and ($cmd -ne "p"))
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$TRUE, ParameterSetName="Random")]
+            [switch]$random,
+        [Parameter(Mandatory=$TRUE, ParameterSetName="Salted")]
+            [switch]$salted,
+        [Parameter(Mandatory=$FALSE)]
+            [switch]$multithreaded,
+        [Parameter(Mandatory=$TRUE)]
+            [int]$minPasswordLength,
+        [Parameter(Mandatory=$TRUE)]
+            [int]$maxPasswordLength,
+        [Parameter(Mandatory=$FALSE)]
+            [int]$maxThreads,
+        [Parameter(Mandatory=$TRUE)]
+            [array]$machineNames,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$localAccountName,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$outFilePath
+    )
+                                
+    $passwordsArray = @()
+    if($random){
+        #build up password array for random passwords
+        foreach($m in $machineNames){
+            $passwordLength = Get-Random -Minimum $minPasswordLength -Maximum ($maxPasswordLength+1); 
+            $passwordsArray += (New-RandomPassword -length $passwordLength)
+        }
+    }
+    else{
+        #build up password array for salted passwords
+    
+        #read in the password from the user
+        $password = Read-PasswordFromUser
+        
+        #prompt the user to see if they wanted the salt prepended or appended
+        do{
+            $cmd = (Read-Host "Enter location to place salt (p)repend or (a)ppend.").toLower()
+        }while(($cmd -ne "a") -and ($cmd -ne "p"))
 
-		#iterate over all machines and change the password for $machineName\$localAccountName
+        #iterate over all machines and change the password for $machineName\$localAccountName
         foreach($name in $machineNames){
             $salt = $name.toLower()
             if($cmd -eq "p"){
-				$saltedPassword = New-SecureStringPrependedWithString $salt $password					
-			}
-			else{
-				$saltedPassword = New-SecureStringAppendedWithString $salt $password
-			}
-			$passwordsArray += $saltedPassword
+                $saltedPassword = New-SecureStringPrependedWithString $salt $password                    
+            }
+            else{
+                $saltedPassword = New-SecureStringAppendedWithString $salt $password
+            }
+            $passwordsArray += $saltedPassword
         }
-		
-		
-		
-	}
-	Test-Assert {($passwordsArray).count -eq ($machineNames).count}
+    }
+    Test-Assert {($passwordsArray).count -eq ($machineNames).count}
     if($multithreaded){
-	    Update-LocalAccountPasswordForAllHosts -multithreaded -localAccountName $localAccountName -machineNames $machineNames -passwords $passwordsArray -outFilePath $outFilePath
+        Update-LocalAccountPasswordForAllHosts -multithreaded -localAccountName $localAccountName -machineNames $machineNames -passwords $passwordsArray -outFilePath $outFilePath
     }
-	else{
+    else{
         Update-LocalAccountPasswordForAllHosts -localAccountName $localAccountName -machineNames $machineNames -passwords $passwordsArray -outFilePath $outFilePath
-    }
-							
-								
-							
+    }                   
 }
 
-
-
 function Update-LocalAccountPasswordForAllHosts(){
-	param(
-		[Parameter(Mandatory=$FALSE)]
-			[switch]$multiThreaded,
-		[Parameter(Mandatory=$TRUE)]
-			[array]$machineNames,
-		[Parameter(Mandatory=$TRUE)]
-			[array]$passwords,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$localAccountName,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$outFilePath
-			
-	)
-	$passwordFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($outFilePath)
-	$errorFile = Join-Path (Split-Path $passwordFile -Parent) "machinesNotChanged.out"
+    param(
+        [Parameter(Mandatory=$FALSE)]
+            [switch]$multiThreaded,
+        [Parameter(Mandatory=$TRUE)]
+            [array]$machineNames,
+        [Parameter(Mandatory=$TRUE)]
+            [array]$passwords,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$localAccountName,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$outFilePath        
+    )
+    $passwordFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($outFilePath)
+    $errorFile = Join-Path (Split-Path $passwordFile -Parent) "machinesNotChanged.out"
 
-	
-	Out-File -FilePath $passwordFile > $NULL #clear file
-	Out-File -FilePath $errorFile > $NULL #clear file
+    Out-File -FilePath $passwordFile > $NULL #clear file
+    Out-File -FilePath $errorFile > $NULL #clear file
 
-	if($multiThreaded){
-		Update-LocalAccountPasswordForAllHostsMT -machineNames $machineNames -passwords $passwords -localAccountName $localAccountName -passwordFile $passwordFile -errorFile $errorFile
-	}		
-	else{
-		Update-LocalAccountPasswordForAllHostsST -machineNames $machineNames -passwords $passwords -localAccountName $localAccountName -passwordFile $passwordFile -errorFile $errorFile
-		
-	}				
-									
+    if($multiThreaded){
+        Update-LocalAccountPasswordForAllHostsMT -machineNames $machineNames -passwords $passwords -localAccountName $localAccountName -passwordFile $passwordFile -errorFile $errorFile
+    }        
+    else{
+        Update-LocalAccountPasswordForAllHostsST -machineNames $machineNames -passwords $passwords -localAccountName $localAccountName -passwordFile $passwordFile -errorFile $errorFile  
+    }                                
 }
 
 function Update-LocalAccountPasswordForAllHostsMT(){
-	param(
-		[Parameter(Mandatory=$TRUE)]
-			[array]$machineNames,
-		[Parameter(Mandatory=$TRUE)]
-			[array]$passwords,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$localAccountName,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$passwordFile,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$errorFile
-			
-	)
-	try{
-		$mgr = New-ParallelTaskManager $maxThreads
-		
-		$setPasswordSB = {
-			#script block for threaded password changing
-			#get local information through WinNT provider and change password
-			#through iADSuser interface.  Output successful pw changes to
-			#$outFilePath and unsuccessful changes to $errorPath and console
-			param(
-				[string]$machineName,
-				[System.Security.SecureString]$password,
-				[string]$localAccountName,
-				[string]$passwordFile,
-				[string]$errorFile
-			)
+    param(
+        [Parameter(Mandatory=$TRUE)]
+            [array]$machineNames,
+        [Parameter(Mandatory=$TRUE)]
+            [array]$passwords,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$localAccountName,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$passwordFile,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$errorFile      
+    )
+    try{
+        $mgr = New-ParallelTaskManager $maxThreads
+        
+        $setPasswordSB = {
+            #script block for threaded password changing
+            #get local information through WinNT provider and change password
+            #through iADSuser interface.  Output successful pw changes to
+            #$outFilePath and unsuccessful changes to $errorPath and console
+            param(
+                [string]$machineName,
+                [System.Security.SecureString]$password,
+                [string]$localAccountName,
+                [string]$passwordFile,
+                [string]$errorFile
+            )
             Import-module Windows\DomainInfo -force
             import-module Windows\AccountInfo -force
             import-module Windows\General -force
@@ -662,38 +560,38 @@ function Update-LocalAccountPasswordForAllHostsMT(){
             import-module password -force
             import-module windows\securestring -force
             import-module windows\filesystem -force
-			
-			function Append-FileThreadSafe($filepath, $data){
-				#appends $data to the file located at $filepath in a threadsafe
-				#manner.  This script uses a global semaphore for mutual exclusion
-				$sem = New-Object -TypeName System.Threading.Semaphore(1,1,"Global\PWSem")
-				[void]$sem.waitOne()
-				try{
+            
+            function Append-FileThreadSafe($filepath, $data){
+                #appends $data to the file located at $filepath in a threadsafe
+                #manner.  This script uses a global semaphore for mutual exclusion
+                $sem = New-Object -TypeName System.Threading.Semaphore(1,1,"Global\PWSem")
+                [void]$sem.waitOne()
+                try{
 
-					Out-File -FilePath $filepath -InputObject $data -Append > $NULL
-				}
-				finally{
-					[void]$sem.release()
-					$sem = $NULL
-				}
-			}
-			function Format-ErrorMessage($errorMessage){
-				if($errorMessage){
-					$msg = $errorMessage.split(":")
-					Write-Output (($errormessage.split(":"))[1].replace('"', "").trim())
-				}
-			}
+                    Out-File -FilePath $filepath -InputObject $data -Append > $NULL
+                }
+                finally{
+                    [void]$sem.release()
+                    $sem = $NULL
+                }
+            }
+            function Format-ErrorMessage($errorMessage){
+                if($errorMessage){
+                    $msg = $errorMessage.split(":")
+                    Write-Output (($errormessage.split(":"))[1].replace('"', "").trim())
+                }
+            }
             function Edit-LocalAccountPassword(){
-	            param(
-		            [Parameter(Mandatory=$TRUE)]
-		            [AllowNull()]
-			            [ADSI]$account,
-		            [Parameter(Mandatory=$TRUE)]
-			            [System.Security.SecureString]$password
-	            )
+                param(
+                    [Parameter(Mandatory=$TRUE)]
+                    [AllowNull()]
+                        [ADSI]$account,
+                    [Parameter(Mandatory=$TRUE)]
+                        [System.Security.SecureString]$password
+                )
 
-	            if(Test-ADSISuccess $account){
-		            $account.setPassword((ConvertFrom-SecureStringToBStr $password))
+                if(Test-ADSISuccess $account){
+                    $account.setPassword((ConvertFrom-SecureStringToBStr $password))
                     if($?){
                         $account.setInfo()
                         if($?){
@@ -707,85 +605,84 @@ function Update-LocalAccountPasswordForAllHostsMT(){
                     else{
                         throw "could not set the password for account $account"
                     }
-	            }
-	            return $FALSE
+                }
+                return $FALSE
             }
             try{
-			    $success = Edit-LocalAccountPassword (Get-User -local -name $localAccountName -computerName $machineName) ($password)
-			    if($success){
+                $success = Edit-LocalAccountPassword (Get-User -local -name $localAccountName -computerName $machineName) ($password)
+                if($success){
                     $output = "$machineName`t`t$localAccountName`t`t$(ConvertFrom-SecureStringToBStr $password)"
                     Write-Output $outpu
                     Append-FileThreadSafe $passwordFile $output
-			    }
-			    else{
-				    throw [System.InvalidOperationException]
-			    }
-		    }
-		    catch [Exception] {
+                }
+                else{
+                    throw [System.InvalidOperationException]
+                }
+            }
+            catch [Exception] {
                 Append-FileThreadSafe $errorFile $machineName
-			    $error | foreach{Format-ErrorMessage $($_.Exception.message)}  | foreach{Write-Output "Error changing password for $machineName`: $_"}
-			    
-		    } 
-		}		
-		for($i=0; $i -lt $machineNames.count; $i++ ){
-			#iterate over all machine names and change password
-			[void]$mgr.new_task($setPasswordSB, @($machineNames[$i], $passwords[$i], $localAccountName, $passwordFile, $errorFile))
-		}
-		$output = $mgr.receive_alltasks()
-		[array]$errors = $output | where {$_ -ne $NULL}
-		return $errors
-		
-	}
-	finally{$jobs = $NULL}						
-									
+                $error | foreach{Format-ErrorMessage $($_.Exception.message)}  | foreach{Write-Output "Error changing password for $machineName`: $_"}
+                
+            } 
+        }        
+        for($i=0; $i -lt $machineNames.count; $i++ ){
+            #iterate over all machine names and change password
+            [void]$mgr.new_task($setPasswordSB, @($machineNames[$i], $passwords[$i], $localAccountName, $passwordFile, $errorFile))
+        }
+        $output = $mgr.receive_alltasks()
+        [array]$errors = $output | where {$_ -ne $NULL}
+        return $errors  
+    }
+    finally{
+        $jobs = $NULL
+    }                                  
 }
 
 function Update-LocalAccountPasswordForAllHostsST(){
-	param(
-		[Parameter(Mandatory=$TRUE)]
-			[array]$machineNames,
-		[Parameter(Mandatory=$TRUE)]
-			[array]$passwords,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$localAccountName,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$passwordFile,
-		[Parameter(Mandatory=$TRUE)]
-			[string]$errorFile
-			
-	)
-	for($i=0; $i -lt $machineNames.count; $i++){
-		try{
-			$success = Edit-LocalAccountPassword (Get-User -local -name $localAccountName -computerName $machineNames[$i]) ($passwords[$i])
-			if($success){
-				$output = "$($machineNames[$i])`t`t$localAccountName`t`t$(ConvertFrom-SecureStringToBStr ($passwords[$i]))"
-				Out-File -FilePath $passwordFile -InputObject $output -Append | Out-Null
-				Write-Host "Password successfully changed on $($machineNames[$i]) for $($machineNames[$i])\$localAccountName"
-			}
-			else{
-				throw [System.InvalidOperationException]
-			}
-		}
-		catch [Exception] {
-			$message = "Error changing password on $($machineNames[$i]) for $($machineNames[$i])\$localAccountName"
-			Write-Output $message
-			Out-File -FilePath $errorFile -InputObject $machineNames[$i] -Append
-		} 
-	}
+    param(
+        [Parameter(Mandatory=$TRUE)]
+            [array]$machineNames,
+        [Parameter(Mandatory=$TRUE)]
+            [array]$passwords,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$localAccountName,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$passwordFile,
+        [Parameter(Mandatory=$TRUE)]
+            [string]$errorFile            
+    )
+    for($i=0; $i -lt $machineNames.count; $i++){
+        try{
+            $success = Edit-LocalAccountPassword (Get-User -local -name $localAccountName -computerName $machineNames[$i]) ($passwords[$i])
+            if($success){
+                $output = "$($machineNames[$i])`t`t$localAccountName`t`t$(ConvertFrom-SecureStringToBStr ($passwords[$i]))"
+                Out-File -FilePath $passwordFile -InputObject $output -Append | Out-Null
+                Write-Host "Password successfully changed on $($machineNames[$i]) for $($machineNames[$i])\$localAccountName"
+            }
+            else{
+                throw [System.InvalidOperationException]
+            }
+        }
+        catch [Exception] {
+            $message = "Error changing password on $($machineNames[$i]) for $($machineNames[$i])\$localAccountName"
+            Write-Output $message
+            Out-File -FilePath $errorFile -InputObject $machineNames[$i] -Append
+        } 
+    }
 }
 
 function Edit-LocalAccountPassword(){
-	param(
-		[Parameter(Mandatory=$TRUE)]
-		[AllowNull()]
-			[ADSI]$account,
-		[Parameter(Mandatory=$TRUE)]
-			[System.Security.SecureString]$password
-	)
-						
-	if(Test-ADSISuccess $account){
-		
-		$account.setPassword((ConvertFrom-SecureStringToBStr $password))
+    param(
+        [Parameter(Mandatory=$TRUE)]
+        [AllowNull()]
+            [ADSI]$account,
+        [Parameter(Mandatory=$TRUE)]
+            [System.Security.SecureString]$password
+    )
+                        
+    if(Test-ADSISuccess $account){
+        
+        $account.setPassword((ConvertFrom-SecureStringToBStr $password))
         if($?){
             $account.setInfo()
             if($?){
@@ -795,26 +692,24 @@ function Edit-LocalAccountPassword(){
                 throw "could not set the password for account $account"
             }
         }
-
         else{
             throw "could not set the password for account $account"
         }
 
-	}
-	return $FALSE
+    }
+    return $FALSE
 }
 
 function Test-ForceUSBKeyUsage(){
     param(
         [Parameter(Mandatory=$TRUE, position=1)]
-			[string]$outFilePath
+            [string]$outFilePath
     )
-	if($(Test-isPathOnUSBDrive $outFilePath) -eq $FALSE){
+    if($(Test-isPathOnUSBDrive $outFilePath) -eq $FALSE){
         return $FALSE
-		
-	}
-    return $TRUE					
-								
+        
+    }
+    return $TRUE                             
 }
 
 
@@ -829,22 +724,17 @@ function Get-FunctionParametersPTHTools(){
     foreach($key in $cmd.Parameters.keys){
         $metadata = $cmd.parameters.item($key)
         try{
-        	$value = (Get-Variable -ErrorAction Stop -errorvariable "fpErr" -scope 1 $key).value
-	        if($value -or $metadata.attributes.typeid.name -eq $script:ALLOW_EMPTY_STRING_ATTR){
-	            $result.add($key, $value)
-	        }
-		}
+            $value = (Get-Variable -ErrorAction Stop -errorvariable "fpErr" -scope 1 $key).value
+            if($value -or $metadata.attributes.typeid.name -eq $script:ALLOW_EMPTY_STRING_ATTR){
+                $result.add($key, $value)
+            }
+        }
         catch [System.Management.Automation.ItemNotFoundException]{
-		#	Write-Host "CANNOT FIND PARAMETER: $key for function $_function"
-		}
+        #    Write-Host "CANNOT FIND PARAMETER: $key for function $_function"
+        }
     }
     return $result
-
 }
-
-
-
-
 
 function Get-SetDifference(){
     param(
@@ -860,189 +750,138 @@ function Get-SetDifference(){
         if(-not ($table.containsKey($ele))){
             $difference += $ele
         }
-
-
     }
     return $difference
 }
 
-
 function Get-LocalAccountSummaryOnDomain(){
-	[CmdletBinding()]
-	param()
-	BEGIN{
+    [CmdletBinding()]
+    param()
 
-	}
-	PROCESS{		
-		$localAccountMgr = New-ParallelTaskManager 25
-		$adminAccountMgr = New-ParallelTaskManager 25
-		try{
-			$machinesArray = @(Get-DomainComputersSansDomainControllers)
-			
-			$localAccountSB = {
-				param(
-					[string]$computername=$env:COMPUTERNAME
-				)
-				import-module Windows\AccountInfo -force
-				$localAccount = New-Object PSObject
-				$localAccount | add-member -membertype noteproperty "host" $computername
-		        try{
-					$accountNames = (Get-Group -local -computerName $computername | Get-GroupMembers -local -computerName $computername).name
-					$localAccount | add-member -membertype noteproperty "accountNames" $($accountNames | Sort-Object)		
-		        }
-		        catch{
-		            Write-Output "Host $computername is unavailable"
-		            Write-output $error
-		            Write-Output "`r`nException $($_.exception.toString()) occurred getting Local Admin Accounts on host: $machineName"
-		        }
-		        finally{
-					$localAccount
-				}
-			}
-			
-			$adminAccountSB = {
-				param(
-					[string]$computername=$env:COMPUTERNAME
-				)
-				import-module Windows\AccountInfo -force
-				$adminAccounts = New-Object PSObject
-				$adminAccounts | add-member -membertype noteproperty "host" $computername
-		        try{
+    BEGIN{
+    }
+    PROCESS{        
+        $localAccountMgr = New-ParallelTaskManager 25
+        $adminAccountMgr = New-ParallelTaskManager 25
+        try{
+            $machinesArray = @(Get-DomainComputersSansDomainControllers)
+            
+            $localAccountSB = {
+                param(
+                    [string]$computername=$env:COMPUTERNAME
+                )
+                import-module Windows\AccountInfo -force
+                $localAccount = New-Object PSObject
+                $localAccount | add-member -membertype noteproperty "host" $computername
+                try{
+                    $accountNames = (Get-Group -local -computerName $computername | Get-GroupMembers -local -computerName $computername).name
+                    $localAccount | add-member -membertype noteproperty "accountNames" $($accountNames | Sort-Object)        
+                }
+                catch{
+                    Write-Output "Host $computername is unavailable"
+                    Write-output $error
+                    Write-Output "`r`nException $($_.exception.toString()) occurred getting Local Admin Accounts on host: $machineName"
+                }
+                finally{
+                    $localAccount
+                }
+            }
+            
+            $adminAccountSB = {
+                param(
+                    [string]$computername=$env:COMPUTERNAME
+                )
+                import-module Windows\AccountInfo -force
+                $adminAccounts = New-Object PSObject
+                $adminAccounts | add-member -membertype noteproperty "host" $computername
+                try{
                     $accountNames = ((Get-Group -local -name $(Get-LocalAdminGroupName) -computerName $computername) | Get-GroupMembers -local -computerName $computername).name
-					$adminAccounts | add-member -membertype noteproperty "accountNames" $($accountNames | Sort-Object)		
-		        }
-		        catch{
-		            Write-Output "Host $computername is unavailable"
-		            Write-output $error
-		            Write-Output "`r`nException $($_.exception.toString()) occurred getting Local Admin Accounts on host: $machineName"
-		        }
-		        finally{
-					$adminAccounts
-				}
-			}
-			
-			foreach($m in $machinesArray){
-				[void]$localAccountMgr.new_task($localAccountSB, @($m))
-				[void]$adminAccountMgr.new_task($adminAccountSB, @($m))
-			}
-			
-			$accountOutput = $localAccountMgr.receive_alltasks()
-			$adminOutput = $adminAccountMgr.receive_allTasks()
-			
-			$currFormatEnumerationLimit = $global:formatEnumerationLimit
-			$global:formatEnumerationLimit = -1
-			Write-Host "*****Summary of Local Accounts*****"
-			#$accountOutput | where {$_.accountnames -ne $NULL} | Select host, accountnames | sort host | group -property accountnames  | Sort -descending count | format-table @{Label="Count";Expression={$_.count};Width=15;Alignment="Left"}, @{label='Host';Expression={$_.group.host};Width=50}, @{label='Local Accounts';Expression={$_.group.accountnames | Sort -unique }} -wrap 
-			$accountOutput | where {$_.accountnames -ne $NULL} | Select host, accountnames |  group -property accountnames  | Sort -descending count | format-table  @{label='Host';Expression={$_.group[0].host};Alignment="Left";Width=50}, @{label='Local Accounts';Expression={$_.group[0].accountnames | Sort -unique }} -wrap | Out-Host
-			Write-Host "***********************************"
-			
-			Write-Host "*****Summary of Local Admin Accounts*****"
-			$adminOutput | where {$_.accountnames -ne $NULL} | Select host, accountnames | group -property accountnames | Sort -descending count | format-table @{label='Host';Expression={$_.group | foreach{$_.host}};Alignment="Left";Width=50}, @{label='Admin Accounts';e={$_.group[0].accountnames | Sort -unique}} -wrap | Out-Host
-			Write-Host "*****************************************"
-			
-			Write-Host "*****Unique Local Accounts*****"
-			$accountOutput | foreach{$_.accountNames} | Sort -unique | Out-Host
-			Write-Host "*******************************"
-			
-			Write-Host "*****Unique Admin Accounts*****"
-			$adminOutput | foreach{$_.accountNames} | Sort -unique | Out-Host
-			Write-Host "*******************************"
-			
-			Write-Host "*****Unavailable Hosts*****"
-			$accountOutput | Where {$_.accountnames -eq $NULL} | foreach{$_.host} | Out-Host
-			Write-Host "***************************" 
-			$global:formatEnumerationLimit = $currFormatEnumerationLimit 
-		}
-		finally{
-			$localAccountMgr = $NULL
-			$adminAccountMgr = $NULL
-		}
-	}
-	END{}
+                    $adminAccounts | add-member -membertype noteproperty "accountNames" $($accountNames | Sort-Object)        
+                }
+                catch{
+                    Write-Output "Host $computername is unavailable"
+                    Write-output $error
+                    Write-Output "`r`nException $($_.exception.toString()) occurred getting Local Admin Accounts on host: $machineName"
+                }
+                finally{
+                    $adminAccounts
+                }
+            }
+            
+            foreach($m in $machinesArray){
+                [void]$localAccountMgr.new_task($localAccountSB, @($m))
+                [void]$adminAccountMgr.new_task($adminAccountSB, @($m))
+            }
+            
+            $accountOutput = $localAccountMgr.receive_alltasks()
+            $adminOutput = $adminAccountMgr.receive_allTasks()
+            
+            $currFormatEnumerationLimit = $global:formatEnumerationLimit
+            $global:formatEnumerationLimit = -1
+            Write-Host "*****Summary of Local Accounts*****"
+            #$accountOutput | where {$_.accountnames -ne $NULL} | Select host, accountnames | sort host | group -property accountnames  | Sort -descending count | format-table @{Label="Count";Expression={$_.count};Width=15;Alignment="Left"}, @{label='Host';Expression={$_.group.host};Width=50}, @{label='Local Accounts';Expression={$_.group.accountnames | Sort -unique }} -wrap 
+            $accountOutput | where {$_.accountnames -ne $NULL} | Select host, accountnames |  group -property accountnames  | Sort -descending count | format-table  @{label='Host';Expression={$_.group[0].host};Alignment="Left";Width=50}, @{label='Local Accounts';Expression={$_.group[0].accountnames | Sort -unique }} -wrap | Out-Host
+            Write-Host "***********************************"
+            
+            Write-Host "*****Summary of Local Admin Accounts*****"
+            $adminOutput | where {$_.accountnames -ne $NULL} | Select host, accountnames | group -property accountnames | Sort -descending count | format-table @{label='Host';Expression={$_.group | foreach{$_.host}};Alignment="Left";Width=50}, @{label='Admin Accounts';e={$_.group[0].accountnames | Sort -unique}} -wrap | Out-Host
+            Write-Host "*****************************************"
+            
+            Write-Host "*****Unique Local Accounts*****"
+            $accountOutput | foreach{$_.accountNames} | Sort -unique | Out-Host
+            Write-Host "*******************************"
+            
+            Write-Host "*****Unique Admin Accounts*****"
+            $adminOutput | foreach{$_.accountNames} | Sort -unique | Out-Host
+            Write-Host "*******************************"
+            
+            Write-Host "*****Unavailable Hosts*****"
+            $accountOutput | Where {$_.accountnames -eq $NULL} | foreach{$_.host} | Out-Host
+            Write-Host "***************************" 
+            $global:formatEnumerationLimit = $currFormatEnumerationLimit 
+        }
+        finally{
+            $localAccountMgr = $NULL
+            $adminAccountMgr = $NULL
+        }
+    }
+    END{}
 }
 
+function Invoke-SmartcardHashRefresh() {
+<#
+    .SYNOPSIS
+    Changes the hash for any Active Directory accounts that require smartcards for login.  
 
+    .DESCRIPTION
+    Changes the hash for any Active Directory accounts that require smartcards for login.
 
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh
 
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh -Verbose
+#>
+    [CmdletBinding()]
+    param()
+    BEGIN{
+        Import-Module ActiveDirectory
+    }
+    PROCESS {
+        Get-ADUser -Filter 'SmartcardLogonRequired -eq $true' | ForEach-Object {
+            # ChangePasswordAtLogon cannot be set to $true or 1 for an account that also has the PasswordNeverExpires property set to true.
+            if (-not($_.PasswordNeverExpires)) {
+                Set-ADUser -Identity $_ -ChangePasswordAtLogon $true
+                Set-ADUser -Identity $_ -ChangePasswordAtLogon $false
+            } else {
+                Write-Warning -Message ('Skipped toggling the ChangePasswordAtLogon property for {0} {1} because the PasswordNeverExpires property was set to true' -f  $_.SamAccountName,$_.Name)
+            }
 
-# SIG # Begin signature block
-# MIIOwwYJKoZIhvcNAQcCoIIOtDCCDrACAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAl65tX7YgUCPwz
-# 4ZBpd57F/tzZdx7xBpx4H2QE2eE/8qCCC+MwggU4MIIEIKADAgECAhAL+AYYcFbO
-# B4Q1jrTl6zCxMA0GCSqGSIb3DQEBBQUAMG8xCzAJBgNVBAYTAlVTMRUwEwYDVQQK
-# EwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5jb20xLjAsBgNV
-# BAMTJURpZ2lDZXJ0IEFzc3VyZWQgSUQgQ29kZSBTaWduaW5nIENBLTEwHhcNMTQx
-# MDA5MDAwMDAwWhcNMTUwOTIzMTIwMDAwWjCBjTELMAkGA1UEBhMCVVMxETAPBgNV
-# BAgTCE1hcnlsYW5kMRMwEQYDVQQHEwpGb3J0IE1lYWRlMSowKAYDVQQKEyFJbmZv
-# cm1hdGlvbiBBc3N1cmFuY2UgRGlyZWN0b3JhdGUxKjAoBgNVBAMTIUluZm9ybWF0
-# aW9uIEFzc3VyYW5jZSBEaXJlY3RvcmF0ZTCCASIwDQYJKoZIhvcNAQEBBQADggEP
-# ADCCAQoCggEBANpVP+Teg9dGEnPsWCln0dy4iAcLzEBLIA+9qGwQNk1trvRq+uvY
-# yHmZzKgELuY+yzIhvn94AnISiMCufC2MqHpf3fNTQIzNY0ABfTPjti/LRG1ErvuN
-# 2YpD6oDkOwwSpsA3dno6FNHvg99qdp+ELjftYPdLGUqNDd3psfXK46t0cgWBtysJ
-# DLCVpMoyAlVBMZy28GSGYYVjvHhMPqBy2ZlYXRS0lTTWtFo0+PanFqhWnvwK3Cg+
-# ip8kw17iBqTC9FfH3mbyZA8brb1Ihhjr44EQdbGJdzXBaodV8me7H+XmthNgXTii
-# ZkxMlX2wiGAQXQ0q5+Hyi0qoo9b4UbYi0sUCAwEAAaOCAa8wggGrMB8GA1UdIwQY
-# MBaAFHtozimqwBe+SXrh5T/Wp/dFjzUyMB0GA1UdDgQWBBTACYQFasXjQ4Ibq+1U
-# cOxmiajiPDAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwbQYD
-# VR0fBGYwZDAwoC6gLIYqaHR0cDovL2NybDMuZGlnaWNlcnQuY29tL2Fzc3VyZWQt
-# Y3MtZzEuY3JsMDCgLqAshipodHRwOi8vY3JsNC5kaWdpY2VydC5jb20vYXNzdXJl
-# ZC1jcy1nMS5jcmwwQgYDVR0gBDswOTA3BglghkgBhv1sAwEwKjAoBggrBgEFBQcC
-# ARYcaHR0cHM6Ly93d3cuZGlnaWNlcnQuY29tL0NQUzCBggYIKwYBBQUHAQEEdjB0
-# MCQGCCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wTAYIKwYBBQUH
-# MAKGQGh0dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEFzc3VyZWRJ
-# RENvZGVTaWduaW5nQ0EtMS5jcnQwDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQUF
-# AAOCAQEADchXouHNJ8uOb2RxgMmqLPeBTUu42ubkGYVn7jDMiQWsCnP8cPOmwzP8
-# wMu67msc9u5eMtx6iIqIkhBXzPiSewOItmh5PbYhqEgN3Ig3PC0m+CepvVIhkHXi
-# x27G22yG1kgUZxeu5DrAvYcIIQGdntcNrjCcz57NES7wIgKWE5fQTvBC5bhWhT+C
-# 4ItmQZB2MoFfh42TZUntifeY+6vFQ+hFWFQKyktaxpUC4MFQnSIEr+OkVoiOgjLd
-# A+afOR7YiVC3+WA8HMeSa8OmKqowtMuI5m9pgvByehgGs0HU0blNlMaudmgg3nwo
-# ohrkvZB6AMxm5fS7M/9a4PXUyk+ypzCCBqMwggWLoAMCAQICEA+oSQYV1wCgviF2
-# /cXsbb0wDQYJKoZIhvcNAQEFBQAwZTELMAkGA1UEBhMCVVMxFTATBgNVBAoTDERp
-# Z2lDZXJ0IEluYzEZMBcGA1UECxMQd3d3LmRpZ2ljZXJ0LmNvbTEkMCIGA1UEAxMb
-# RGlnaUNlcnQgQXNzdXJlZCBJRCBSb290IENBMB4XDTExMDIxMTEyMDAwMFoXDTI2
-# MDIxMDEyMDAwMFowbzELMAkGA1UEBhMCVVMxFTATBgNVBAoTDERpZ2lDZXJ0IElu
-# YzEZMBcGA1UECxMQd3d3LmRpZ2ljZXJ0LmNvbTEuMCwGA1UEAxMlRGlnaUNlcnQg
-# QXNzdXJlZCBJRCBDb2RlIFNpZ25pbmcgQ0EtMTCCASIwDQYJKoZIhvcNAQEBBQAD
-# ggEPADCCAQoCggEBAJx8+aCPCsqJS1OaPOwZIn8My/dIRNA/Im6aT/rO38bTJJH/
-# qFKT53L48UaGlMWrF/R4f8t6vpAmHHxTL+WD57tqBSjMoBcRSxgg87e98tzLuIZA
-# RR9P+TmY0zvrb2mkXAEusWbpprjcBt6ujWL+RCeCqQPD/uYmC5NJceU4bU7+gFxn
-# d7XVb2ZklGu7iElo2NH0fiHB5sUeyeCWuAmV+UuerswxvWpaQqfEBUd9YCvZoV29
-# +1aT7xv8cvnfPjL93SosMkbaXmO80LjLTBA1/FBfrENEfP6ERFC0jCo9dAz0eoty
-# S+BWtRO2Y+k/Tkkj5wYW8CWrAfgoQebH1GQ7XasCAwEAAaOCA0MwggM/MA4GA1Ud
-# DwEB/wQEAwIBhjATBgNVHSUEDDAKBggrBgEFBQcDAzCCAcMGA1UdIASCAbowggG2
-# MIIBsgYIYIZIAYb9bAMwggGkMDoGCCsGAQUFBwIBFi5odHRwOi8vd3d3LmRpZ2lj
-# ZXJ0LmNvbS9zc2wtY3BzLXJlcG9zaXRvcnkuaHRtMIIBZAYIKwYBBQUHAgIwggFW
-# HoIBUgBBAG4AeQAgAHUAcwBlACAAbwBmACAAdABoAGkAcwAgAEMAZQByAHQAaQBm
-# AGkAYwBhAHQAZQAgAGMAbwBuAHMAdABpAHQAdQB0AGUAcwAgAGEAYwBjAGUAcAB0
-# AGEAbgBjAGUAIABvAGYAIAB0AGgAZQAgAEQAaQBnAGkAQwBlAHIAdAAgAEMAUAAv
-# AEMAUABTACAAYQBuAGQAIAB0AGgAZQAgAFIAZQBsAHkAaQBuAGcAIABQAGEAcgB0
-# AHkAIABBAGcAcgBlAGUAbQBlAG4AdAAgAHcAaABpAGMAaAAgAGwAaQBtAGkAdAAg
-# AGwAaQBhAGIAaQBsAGkAdAB5ACAAYQBuAGQAIABhAHIAZQAgAGkAbgBjAG8AcgBw
-# AG8AcgBhAHQAZQBkACAAaABlAHIAZQBpAG4AIABiAHkAIAByAGUAZgBlAHIAZQBu
-# AGMAZQAuMBIGA1UdEwEB/wQIMAYBAf8CAQAweQYIKwYBBQUHAQEEbTBrMCQGCCsG
-# AQUFBzABhhhodHRwOi8vb2NzcC5kaWdpY2VydC5jb20wQwYIKwYBBQUHMAKGN2h0
-# dHA6Ly9jYWNlcnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEFzc3VyZWRJRFJvb3RD
-# QS5jcnQwgYEGA1UdHwR6MHgwOqA4oDaGNGh0dHA6Ly9jcmwzLmRpZ2ljZXJ0LmNv
-# bS9EaWdpQ2VydEFzc3VyZWRJRFJvb3RDQS5jcmwwOqA4oDaGNGh0dHA6Ly9jcmw0
-# LmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEFzc3VyZWRJRFJvb3RDQS5jcmwwHQYDVR0O
-# BBYEFHtozimqwBe+SXrh5T/Wp/dFjzUyMB8GA1UdIwQYMBaAFEXroq/0ksuCMS1R
-# i6enIZ3zbcgPMA0GCSqGSIb3DQEBBQUAA4IBAQB7ch1k/4jIOsG36eepxIe725SS
-# 15BZM/orh96oW4AlPxOPm4MbfEPE5ozfOT7DFeyw2jshJXskwXJduEeRgRNG+pw/
-# alE43rQly/Cr38UoAVR5EEYk0TgPJqFhkE26vSjmP/HEqpv22jVTT8nyPdNs3CPt
-# qqBNZwnzOoA9PPs2TJDndqTd8jq/VjUvokxl6ODU2tHHyJFqLSNPNzsZlBjU1ZwQ
-# PNWxHBn/j8hrm574rpyZlnjRzZxRFVtCJnJajQpKI5JA6IbeIsKTOtSbaKbfKX8G
-# uTwOvZ/EhpyCR0JxMoYJmXIJeUudcWn1Qf9/OXdk8YSNvosesn1oo6WQsQz/MYIC
-# NjCCAjICAQEwgYMwbzELMAkGA1UEBhMCVVMxFTATBgNVBAoTDERpZ2lDZXJ0IElu
-# YzEZMBcGA1UECxMQd3d3LmRpZ2ljZXJ0LmNvbTEuMCwGA1UEAxMlRGlnaUNlcnQg
-# QXNzdXJlZCBJRCBDb2RlIFNpZ25pbmcgQ0EtMQIQC/gGGHBWzgeENY605eswsTAN
-# BglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3AgEMMQowCKACgAChAoAAMBkGCSqG
-# SIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQBgjcCAQsxDjAMBgorBgEEAYI3
-# AgEVMC8GCSqGSIb3DQEJBDEiBCASy55GWbjIgvEUlvpR4nAvZoJZNdPopaTh1dO8
-# aaZK5DANBgkqhkiG9w0BAQEFAASCAQDRxAa1R8puwM+GIMxcSleRpKWWTBRLFxeV
-# qKxbYsnKmCHLtOPaJT0eVW5iHTuctFdwxt2e1356gWYu3pQhs7vHuSQWnTcqNoAk
-# 6EcNnNj8e7FrfbjVE8pIOYfJyaxMedzGG/gOiavJNP75aryN0tSZ0dwNE64WqU/v
-# YD7oCYLq3n/SamwwmytdBEpOjrUSw+r9hahysN1rwNhfQ5KwMeUNr29queJpK8Nt
-# 0wpj8QY+XRsocAmDKXRW6wRyyJgdpHgFqTweO+ttADfv83axWKXerZ6CBrfTqGBx
-# rfpg5/UH1bc/C87HV7hXogJH9X2XJfvnoPM4pEkF7Oe73uZNXSV+
-# SIG # End signature block
+            Set-ADUser -Identity $_ -SmartcardLogonRequired $false
+            Set-ADUser -Identity $_ -SmartcardLogonRequired $true
+
+            Write-Verbose -Message ('Refreshed smartcard hash for {0} {1}' -f  $_.SamAccountName,$_.Name)
+        }
+    }
+    END{}
+}

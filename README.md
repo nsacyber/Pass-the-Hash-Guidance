@@ -1,14 +1,22 @@
 # Pass the Hash Guidance
 
-
 This project hosts scripts for aiding administrators in implementing Pass the Hash mitigations as outlined in the [Reducing the Effectiveness of Pass the Hash](https://www.iad.gov/iad/library/ia-guidance/security-configuration/applications/reducing-the-effectiveness-of-pass-the-hash.cfm) paper.
 
 
-The [PtHTools](./PtHTools) library contains the following cmdlets (use Get-Help on the cmdlets to get more information):  
+The [PtHTools](./PtHTools/) module contains the main commands for helping with implementing PtH mitigations:  
 * Find-PotentialPtHEvents  
 * Invoke-DenyNetworkAccess  
 * Edit-AllLocalAccountPasswords  
-* Get-LocalAccountSummaryOnDomain  
+* Get-LocalAccountSummaryOnDomain
+* Invoke-SmartcardHashRefresh
+ 
+See the [PtHTools readme file](./PtHTools/README.md) for more information on how to use them.
+
+## Microsoft guidance
+* https://aka.ms/pth
+* [Mitigating Pass-the-Hash and Other Credential Theft v1](http://download.microsoft.com/download/7/7/A/77ABC5BD-8320-41AF-863C-6ECFB10CB4B9/Mitigating%20Pass-the-Hash%20(PtH)%20Attacks%20and%20Other%20Credential%20Theft%20Techniques_English.pdf)
+* [Mitigating Pass-the-Hash and Other Credential Theft v2](http://download.microsoft.com/download/7/7/A/77ABC5BD-8320-41AF-863C-6ECFB10CB4B9/Mitigating-Pass-the-Hash-Attacks-and-Other-Credential-Theft-Version-2.pdf)
+* [How Pass-the-Hash works](http://download.microsoft.com/download/C/3/B/C3BD2D13-FC9B-4FAB-A1E7-43FC5DE5CFB2/PassTheHashAttack-DataSheet.pdf)
 
 ## License
 This Work was prepared by a United States Government employee and, therefore, is excluded from copyright by Section 105 of the Copyright Act of 1976.
