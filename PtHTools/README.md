@@ -1,8 +1,11 @@
- # PtHTools
- 
+# PtHTools
+
+The [PtHTools](./PtHTools/) module contains the main commands for helping with implementing PtH mitigations.
+
 ## Getting started
 
-1. [Download](#downloading-the-repository) the repository as a zip file.
+To get started using the PtHTools:
+1. [Download](#downloading-the-repository) the repository as a zip file
 1. [Configure PowerShell](#configuring-the-powershell-environment) 
 1. [Install the PtHTools modules](#installing-the-pthtools-modules)
 1. [Run the PtHTools commands](#using-the-pthtools-module-commands)
@@ -42,7 +45,7 @@ See the [Unblock-File command's documentation](https://technet.microsoft.com/en-
 ## Installing the PtHTools modules
 The PtHTools module, along with its supporting modules, need to be installed into your PowerShell module path before using the main commands.
 1. Expand the **Pass-the-Hash-Guidance-master.zip** file inside your **Downloads** folder. Right clicking on the zip file, selecting Extract All, and clicking Next will create a **Pass-the-Hash-Guidance-master\Pass-the-Hash-Guidance-master** folder hierarchy.
-1. Copy the **Assert**, **multithreading**, **Password**, **PtHTools**, **regression**, and **Windows** module folders to a path contained in the your PowerShell module path (see value of the the $env:PSModulePath environment variable). The %USERPROFILE%\Documents\WindowsPowerShell\Modules\ path is in the PowerShell module path by default.
+1. Copy the **Assert**, **multithreading**, **Password**, **PtHTools**, **regression**, and **Windows** module folders to a path contained in the your PowerShell module path (see the value of the $env:PSModulePath environment variable). The %USERPROFILE%\Documents\WindowsPowerShell\Modules\ path is in the PowerShell module path by default.
 
 The following PowerShell code will perform step #2 from above.
 
@@ -52,11 +55,11 @@ $downloadPath = ($env:USERPROFILE,'Downloads') -join '\'
 cd $downloadPath
 
 if (Test-Path -Path '.\Pass-the-Hash-Guidance-master' -PathType Container) {
-    cd Pass-the-Hash-Guidance-master
+    cd '.\Pass-the-Hash-Guidance-master'
 }
 
 if (Test-Path -Path '.\Pass-the-Hash-Guidance-master' -PathType Container) {
-    cd Pass-the-Hash-Guidance-master
+    cd '.\Pass-the-Hash-Guidance-master'
 }
 
 $userModulePath = $env:PSModulePath -split '\;' | Where-Object { $_.StartsWith($env:UserProfile) }
@@ -69,14 +72,14 @@ Get-ChildItem -Path '.\' | Where-Object { $_.PSIsContainer } | ForEach-Object { 
 ```
 
 ## Using the PtHTools module commands
-The main PowerShell commands discussed in the paper and found in the PtHTools module are:
+The main PowerShell commands in PtHTools module are:
 * Find-PotentialPtHEvents
 * Invoke-DenyNetworkAccess
 * Edit-AllLocalAccountPasswords
 * Get-LocalAccountSummaryOnDomain
 * Invoke-SmartcardHashRefresh
 
-Use the Get-Help command (e.g. **Get-Help Invoke-SmartcardHashRefresh**) on the main commands to get more information on how to use them. 
+Use the Get-Help command (e.g. **Get-Help Invoke-SmartcardHashRefresh**) on the main commands to get more information on how to use them. The guidance paper also discusses these commands.
 
 To use one of the commands:
 1. Open a PowerShell prompt
