@@ -1,14 +1,15 @@
 # PtHTools
 
-The [PtHTools](./PtHTools/) module contains the main commands for helping with implementing PtH mitigations.
+The PtHTools module contains the main commands for helping with implementing PtH mitigations.
 
 ## Getting started
 
 To get started using the PtHTools:
-1. [Download](#downloading-the-repository) the repository as a zip file
+
+1. [Download](#downloading-the-repository) the repository as a zip file 
 1. [Configure PowerShell](#configuring-the-powershell-environment) 
-1. [Install the PtHTools modules](#installing-the-pthtools-modules)
-1. [Run the PtHTools commands](#using-the-pthtools-module-commands)
+1. [Install the PtHTools modules](#installing-the-pthtools-modules) 
+1. [Run the PtHTools commands](#using-the-pthtools-module-commands) 
 
 ## Downloading the repository
 
@@ -20,9 +21,10 @@ The PowerShell commands are meant to run from a system with at least PowerShell 
 ### Changing the PowerShell execution policy
 
 Users may need to change the default PowerShell execution policy. This can be achieved in a number of different ways:
-* Open a command prompt and run **powershell.exe -ExecutionPolicy Bypass** or **powershell.exe -ExecutionPolicy Unrestricted** and run scripts from that PowerShell session.
-* Open a PowerShell prompt and run **Set-ExecutionPolicy Unrestricted -Scope CurrentUser** and run scripts from any PowerShell session.
-* Open an administrative PowerShell prompt and run **Set-ExecutionPolicy Unrestricted** and run scripts from any PowerShell session.
+
+* Open a command prompt and run **powershell.exe -ExecutionPolicy Bypass** or **powershell.exe -ExecutionPolicy Unrestricted** and run scripts from that PowerShell session. 
+* Open a PowerShell prompt and run **Set-ExecutionPolicy Unrestricted -Scope CurrentUser** and run scripts from any PowerShell session. 
+* Open an administrative PowerShell prompt and run **Set-ExecutionPolicy Unrestricted** and run scripts from any PowerShell session. 
 
 ### Unblocking the PowerShell scripts
 Users will need to unblock the downloaded zip file since it will be marked as having been downloaded from the Internet which PowerShell will block by default. Running the PowerShell scripts inside the zip file without unblocking the file will result in the following warning:
@@ -34,9 +36,10 @@ Run only scripts that you trust. While scripts from the internet can be useful, 
 ```
 
 Open a PowerShell prompt and run the following commands to unblock the PowerShell code in the zip file:
-1. **cd $env:USERPROFILE**
-1. **cd Downloads**
-1. **Unblock-File -Path '.\Pass-the-Hash-Guidance-master.zip'**
+
+1. **cd $env:USERPROFILE** 
+1. **cd Downloads** 
+1. **Unblock-File -Path '.\Pass-the-Hash-Guidance-master.zip'** 
 
 If the downloaded zip file is not unblocked before extracting it, then all the individual PowerShell files that were in the zip file will have to be unblocked. Open a PowerShell prompt and run **[System.IO.FileInfo[]]@(Get-ChildItem -Path '.\Pass-the-Hash-Guidance-master') -Recurse -Filter '\*.psm1' | Unblock-File**
 
@@ -44,8 +47,9 @@ See the [Unblock-File command's documentation](https://technet.microsoft.com/en-
 
 ## Installing the PtHTools modules
 The PtHTools module, along with its supporting modules, need to be installed into your PowerShell module path before using the main commands.
-1. Expand the **Pass-the-Hash-Guidance-master.zip** file inside your **Downloads** folder. Right clicking on the zip file, selecting Extract All, and clicking Next will create a **Pass-the-Hash-Guidance-master\Pass-the-Hash-Guidance-master** folder hierarchy.
-1. Copy the **Assert**, **multithreading**, **Password**, **PtHTools**, **regression**, and **Windows** module folders to a path contained in the your PowerShell module path (see the value of the $env:PSModulePath environment variable). The %USERPROFILE%\Documents\WindowsPowerShell\Modules\ path is in the PowerShell module path by default.
+
+1. Expand the **Pass-the-Hash-Guidance-master.zip** file inside your **Downloads** folder. Right clicking on the zip file, selecting Extract All, and clicking Next will create a **Pass-the-Hash-Guidance-master\Pass-the-Hash-Guidance-master** folder hierarchy. 
+1. Copy the **Assert**, **multithreading**, **Password**, **PtHTools**, **regression**, and **Windows** module folders to a path contained in the your PowerShell module path (see the value of the $env:PSModulePath environment variable). The %USERPROFILE%\Documents\WindowsPowerShell\Modules\ path is in the PowerShell module path by default. 
 
 The following PowerShell code will perform step #2 from above.
 
@@ -73,18 +77,20 @@ Get-ChildItem -Path '.\' | Where-Object { $_.PSIsContainer } | ForEach-Object { 
 
 ## Using the PtHTools module commands
 The main PowerShell commands in PtHTools module are:
-* Find-PotentialPtHEvents
-* Invoke-DenyNetworkAccess
-* Edit-AllLocalAccountPasswords
-* Get-LocalAccountSummaryOnDomain
-* Invoke-SmartcardHashRefresh
+
+* Find-PotentialPtHEvents 
+* Invoke-DenyNetworkAccess 
+* Edit-AllLocalAccountPasswords 
+* Get-LocalAccountSummaryOnDomain 
+* Invoke-SmartcardHashRefresh 
 
 Use the Get-Help command (e.g. **Get-Help Invoke-SmartcardHashRefresh**) on the main commands to get more information on how to use them. The guidance paper also discusses these commands.
 
 To use one of the commands:
-1. Open a PowerShell prompt
-1. Import the PtHTools module (e.g. **Import-Module PtHTools**)
-1. Run one of the main PtHTools commands (e.g. **Invoke-SmartcardHashRefresh**)
+
+1. Open a PowerShell prompt 
+1. Import the PtHTools module (e.g. **Import-Module PtHTools**) 
+1. Run one of the main PtHTools commands (e.g. **Invoke-SmartcardHashRefresh**) 
 
 ## About the other modules
 The other modules (e.g. **mulithreading**, **Password**, and **Windows**) are support modules for performing various actions on Windows-based domain and standalone systems. These modules provide functionality used to build the main commands in the PtHTools modules. Some of the other modules (e.g. **Assert** and **regression**) are used for testing.
