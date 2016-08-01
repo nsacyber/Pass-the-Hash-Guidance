@@ -868,6 +868,9 @@ function Invoke-SmartcardHashRefresh() {
     .PARAMETER Container
     The distinguishedName of the container(s) containing hashes to reset smartcard hashes for.
 
+    .PARAMETER AlwaysUpdatePasswordLastSet
+    Always update the password last set property's timestamp even if the account has the password never expires flag enabled.
+
     .EXAMPLE
     Invoke-SmartcardHashRefresh
 
@@ -876,6 +879,9 @@ function Invoke-SmartcardHashRefresh() {
 
     .EXAMPLE
     Invoke-SmartcardHashRefresh -User 'scuser1',scuser2' -Verbose
+
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh -User 'scuser1' -AlwaysUpdatePasswordLastSet -Verbose
 
     .EXAMPLE
     Invoke-SmartcardHashRefresh -Group 'scgroup1' -Verbose
@@ -904,7 +910,11 @@ function Invoke-SmartcardHashRefresh() {
 
         [Parameter(Position=3, Mandatory=$false, HelpMessage='The distinguishedName of the container(s) containing hashes to reset smartcard hashes for')]
         [ValidateNotNullOrEmpty()]
-        [string[]]$Container
+        [string[]]$Container,
+
+        [Parameter(Position=4, Mandatory=$false, HelpMessage='Always update the password last set property even if the account has the password never expires flag enabled')]
+        [ValidateNotNullOrEmpty()]
+        [switch]$AlwaysUpdatePasswordLastSet
     
     )
     
@@ -942,13 +952,21 @@ function Invoke-SmartcardHashRefresh() {
     # not all cases (User and Group) can use -Filter so use Where-Object to include only smartcard enabled logins
     $users | Select-Object -Unique | Where-Object  { $_.SmartcardLogonRequired -eq $true } | ForEach-Object {
         # ChangePasswordAtLogon cannot be set to $true or 1 for an account that also has the PasswordNeverExpires property set to true.
-        if (-not($_.PasswordNeverExpires)) {
+        if (-not($_.PasswordNeverExpires) -or $AlwaysUpdatePasswordLastSet) {
             #$originalValue = $_.PasswordLastSet -eq 0
+
+            if ($AlwaysUpdatePasswordLastSet) {
+                Set-ADUser -Identity $_ -PasswordNeverExpires $false
+            }
+
             Set-ADUser -Identity $_ -ChangePasswordAtLogon $true
             Set-ADUser -Identity $_ -ChangePasswordAtLogon $false
-            #Set-ADUser -Identity $_ -ChangePasswordAtLogon $originalValue
+
+            if ($AlwaysUpdatePasswordLastSet) {
+                Set-ADUser -Identity $_ -PasswordNeverExpires $true
+            }
         } else {
-            Write-Warning -Message ('Skipped toggling the ChangePasswordAtLogon property for user with login name of {0} because their password never expires' -f  $_.SamAccountName)
+            Write-Warning -Message ('Skipped updating the password last set property for user with login name of {0} because their password never expires. Use the AlwaysUpdatePasswordLastSet option to force an update to the password last set property' -f  $_.SamAccountName)
         }
 
         Set-ADUser -Identity $_ -SmartcardLogonRequired $false
