@@ -856,32 +856,104 @@ function Invoke-SmartcardHashRefresh() {
     .DESCRIPTION
     Changes the hash for any Active Directory accounts that require smartcards for login.
 
+    .PARAMETER User
+    The samAccountName or distinguishedName of the user(s) to reset smartcard hashes for.
+
+    .PARAMETER Group
+    The samAccountName or distinguishedName of the group(s) containing users to reset smartcard hashes for.
+
+    .PARAMETER OU
+    The distinguishedName of the organizational unit(s) containing hashes to reset smartcard hashes for.
+
+    .PARAMETER Container
+    The distinguishedName of the container(s) containing hashes to reset smartcard hashes for.
+
     .EXAMPLE
     Invoke-SmartcardHashRefresh
 
     .EXAMPLE
-    Invoke-SmartcardHashRefresh -Verbose
+    Invoke-SmartcardHashRefresh -Verbose -WhatIf
+
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh -User 'scuser1',scuser2' -Verbose
+
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh -Group 'scgroup1' -Verbose
+
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh -OU 'OU=Smartcard Users,OU=Domain Users,DC=test,DC=net' -Verbose
+
+    .EXAMPLE
+    Invoke-SmartcardHashRefresh -User 'CN=Users,DC=test,DC=net' -Verbose
+
 #>
-    [CmdletBinding()]
-    param()
-    BEGIN{
-        Import-Module ActiveDirectory
+    [CmdletBinding(SupportsShouldProcess=$true)]
+    [OutputType([void])]
+    Param(
+        [Parameter(Position=0, Mandatory=$false, HelpMessage='The samAccountName or distinguishedName of the user(s) to reset smartcard hashes for')]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$User,
+
+        [Parameter(Position=1, Mandatory=$false, HelpMessage='The samAccountName or distinguishedName of the group(s) containing users to reset smartcard hashes for')]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$Group,
+
+        [Parameter(Position=2, Mandatory=$false, HelpMessage='The distinguishedName of the organizational unit(s) containing hashes to reset smartcard hashes for')]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$OU,
+
+        [Parameter(Position=3, Mandatory=$false, HelpMessage='The distinguishedName of the container(s) containing hashes to reset smartcard hashes for')]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$Container
+    
+    )
+    
+    Import-Module ActiveDirectory -Verbose:$false
+
+    $parameters = $PSBoundParameters
+
+    $properties = [string[]]@('PasswordLastSet','PasswordNeverExpires','SamAccountName','SmartcardLogonRequired')
+
+    if ($parameters.ContainsKey('User')) {
+        $validUsers = New-Object System.Collections.Generic.List[string]
+        $User | Select-Object -Unique | ForEach-Object { try { Get-ADUser -Identity $_ | Out-Null; $validUsers.Add($_) } catch {} } 
+
+        $users = $validUsers | ForEach-Object { Get-ADUser -Identity $_ -Properties $properties } # can't use -Filter and -Identity together
+    } elseif ($parameters.ContainsKey('Group')) {
+        $validGroups = New-Object System.Collections.Generic.List[string]
+        $Group | Select-Object -Unique | ForEach-Object { try { Get-ADGroup -Identity $_ | Out-Null; $validGroups.Add($_) } catch {} } 
+
+        $users = $validGroups | ForEach-Object { Get-ADGroupMember -Identity $_ -Recursive | ForEach-Object { Get-ADUser -Identity $_ -Properties $properties } } # can't use -Filter and -Identity together
+    } elseif ($parameters.ContainsKey('OU')) { # could collapse OU and Container into same case since Test-Path works for either one 
+        $validOUs = New-Object System.Collections.Generic.List[string]
+        $OU | Select-Object -Unique | ForEach-Object { try { Get-ADOrganizationalUnit -Identity $_ | Out-Null; $validOUs.Add($_) } catch {} } 
+
+        $users = $validOUs | ForEach-Object { Get-ADUser -Filter 'SmartcardLogonRequired -eq $true' -Properties $properties -SearchScope Subtree -SearchBase $_ }
+    } elseif ($parameters.ContainsKey('Container')) {
+        $validContainers = New-Object System.Collections.Generic.List[string]
+        $Container | Select-Object -Unique | ForEach-Object { if (Test-Path "AD:\$_"){ $validContainers.Add($_) } } | Out-Null # could collapse OU and Container into same case since Test-Path works for either one 
+
+        $users = $validContainers | ForEach-Object { Get-ADUser -Filter 'SmartcardLogonRequired -eq $true' -Properties $properties -SearchScope Subtree -SearchBase $_ }
+    } else {
+        $users = Get-ADUser -Filter 'SmartcardLogonRequired -eq $true' -Properties $properties
     }
-    PROCESS {
-        Get-ADUser -Filter 'SmartcardLogonRequired -eq $true' | ForEach-Object {
-            # ChangePasswordAtLogon cannot be set to $true or 1 for an account that also has the PasswordNeverExpires property set to true.
-            if (-not($_.PasswordNeverExpires)) {
-                Set-ADUser -Identity $_ -ChangePasswordAtLogon $true
-                Set-ADUser -Identity $_ -ChangePasswordAtLogon $false
-            } else {
-                Write-Warning -Message ('Skipped toggling the ChangePasswordAtLogon property for {0} {1} because the PasswordNeverExpires property was set to true' -f  $_.SamAccountName,$_.Name)
-            }
 
-            Set-ADUser -Identity $_ -SmartcardLogonRequired $false
-            Set-ADUser -Identity $_ -SmartcardLogonRequired $true
-
-            Write-Verbose -Message ('Refreshed smartcard hash for {0} {1}' -f  $_.SamAccountName,$_.Name)
+    # the Group case uses -Recursive so it is possible for a user to be repeated so use Select-Object -Unique to filter out repeats
+    # not all cases (User and Group) can use -Filter so use Where-Object to include only smartcard enabled logins
+    $users | Select-Object -Unique | Where-Object  { $_.SmartcardLogonRequired -eq $true } | ForEach-Object {
+        # ChangePasswordAtLogon cannot be set to $true or 1 for an account that also has the PasswordNeverExpires property set to true.
+        if (-not($_.PasswordNeverExpires)) {
+            #$originalValue = $_.PasswordLastSet -eq 0
+            Set-ADUser -Identity $_ -ChangePasswordAtLogon $true
+            Set-ADUser -Identity $_ -ChangePasswordAtLogon $false
+            #Set-ADUser -Identity $_ -ChangePasswordAtLogon $originalValue
+        } else {
+            Write-Warning -Message ('Skipped toggling the ChangePasswordAtLogon property for user with login name of {0} because their password never expires' -f  $_.SamAccountName)
         }
+
+        Set-ADUser -Identity $_ -SmartcardLogonRequired $false
+        Set-ADUser -Identity $_ -SmartcardLogonRequired $true
+
+        Write-Verbose -Message ('Refreshed smartcard hash for user with login name {0}' -f  $_.SamAccountName)
     }
-    END{}
 }

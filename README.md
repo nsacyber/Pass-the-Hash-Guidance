@@ -19,7 +19,7 @@ See the [PtHTools readme file](./PtHTools/README.md) for more information on how
 * [Mitigating Pass-the-Hash and Other Credential Theft v2](http://download.microsoft.com/download/7/7/A/77ABC5BD-8320-41AF-863C-6ECFB10CB4B9/Mitigating-Pass-the-Hash-Attacks-and-Other-Credential-Theft-Version-2.pdf)
 * [How Pass-the-Hash works](http://download.microsoft.com/download/C/3/B/C3BD2D13-FC9B-4FAB-A1E7-43FC5DE5CFB2/PassTheHashAttack-DataSheet.pdf)
 * https://aka.ms/laps - Local Administrator Password Solution (LAPS) is a Microsoft supported tool that ensures local administrator accounts do not all have the same password. It is an alternative to the Edit-AllLocalAccountPasswords command.
-* [krbtgt refresh script](http://blogs.microsoft.com/microsoftsecure/2015/02/11/krbtgt-account-password-reset-scripts-now-available-for-customers/) - Resets the krbtgt account password twice to invalidate Kerberos tickets created by attackers (e.g. Golden Ticket).
+* [krbtgt refresh](http://blogs.microsoft.com/microsoftsecure/2015/02/11/krbtgt-account-password-reset-scripts-now-available-for-customers/) [script](http://blogs.microsoft.com/microsoftsecure/2015/02/11/krbtgt-account-password-reset-scripts-now-available-for-customers/) - Resets the krbtgt account password twice to invalidate Kerberos tickets created by attackers (e.g. Golden Ticket).
 
 ## License
 This Work was prepared by a United States Government employee and, therefore, is excluded from copyright by Section 105 of the Copyright Act of 1976.
