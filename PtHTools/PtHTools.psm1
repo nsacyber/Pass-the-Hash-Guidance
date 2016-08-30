@@ -871,6 +871,9 @@ function Invoke-SmartcardHashRefresh() {
     .PARAMETER AlwaysUpdatePasswordLastSet
     Always update the password last set property's timestamp even if the account has the password never expires flag enabled.
 
+    .PARAMETER Evict
+    Refresh the password hash two times to force active accounts to get locked out for an eviction operation.
+
     .EXAMPLE
     Invoke-SmartcardHashRefresh
 
@@ -914,7 +917,11 @@ function Invoke-SmartcardHashRefresh() {
 
         [Parameter(Position=4, Mandatory=$false, HelpMessage='Always update the password last set property even if the account has the password never expires flag enabled')]
         [ValidateNotNullOrEmpty()]
-        [switch]$AlwaysUpdatePasswordLastSet
+        [switch]$AlwaysUpdatePasswordLastSet,
+
+        [Parameter(Position=5, Mandatory=$false, HelpMessage='Refresh the password hash two times to force active accounts to get locked out for an eviction operation')]
+        [ValidateNotNullOrEmpty()]
+        [switch]$Evict
     
     )
     
@@ -971,6 +978,10 @@ function Invoke-SmartcardHashRefresh() {
 
         Set-ADUser -Identity $_ -SmartcardLogonRequired $false
         Set-ADUser -Identity $_ -SmartcardLogonRequired $true
+
+        if ($Evict) {
+            Set-ADUser -Identity $_ -SmartcardLogonRequired $true
+        }
 
         Write-Verbose -Message ('Refreshed smartcard hash for user with login name {0}' -f  $_.SamAccountName)
     }
