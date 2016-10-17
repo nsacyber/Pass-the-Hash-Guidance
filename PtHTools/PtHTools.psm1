@@ -986,3 +986,71 @@ function Invoke-SmartcardHashRefresh() {
         Write-Verbose -Message ('Refreshed smartcard hash for user with login name {0}' -f  $_.SamAccountName)
     }
 }
+
+function Find-OldSmartcardHash() {
+<#
+    .SYNOPSIS
+        Finds smartcard users whose Active Directory account's hash is over a certain age. 
+
+    .DESCRIPTION
+        Outputs smartcard users and the number of days when their password was last set,
+        where the password was last set more than a specified number of days ago
+        (or 60 days by default).
+
+    .PARAMETER limit
+        The threshold number of days, over which smartcard users require a hash refresh.
+        Default is 60 days. 
+
+    .EXAMPLE
+        Find-OldSmartcardHash
+        Outputs the account names and number of days since the hash was last changed, 
+        for all smartcard users who have not had their hash changed in 60 days.
+
+    .EXAMPLE
+        Find-OldSmartcardHash 30
+        Outputs the account names and number of days since the hash was last changed, 
+        for all smartcard users who have not had their hash changed in 30 days.
+
+    .EXAMPLE
+        Find-OldSmartcardHash | Out-File C:\Users\user\Desktop\outputfile.out
+        Outputs to the file 'C:\Users\user\Desktop\outputfile.out' the account names 
+        and number of days since the hash was last changed, for all smartcard users 
+        who have not had their hash changed in 60 days.
+#>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$false)]
+            [int]$limit = 60
+    )
+
+    Import-Module ActiveDirectory -Verbose:$false
+
+    # Confirm running with elevated privileges
+    $principal = [System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $admin = [System.Security.Principal.WindowsBuiltInRole]::Administrator
+
+    if(-not ($principal.IsInRole($admin))) { 
+        # might not see all smartcard users
+        Write-Warning "Find-OldSmartcardHash is not running with elevated privileges."
+    }
+    
+    # get AD users who need a smartcard to logon
+    $properties = [string[]]@("PasswordLastSet", "SamAccountName", "SmartcardLogonRequired")
+    $users = Get-ADUser -Filter {SmartcardLogonRequired -eq $true} -Properties $properties
+    
+    if($users -ne $null) {
+        $users | ForEach-Object {
+
+            # pwdLastSet could be never; ignore - no warning 
+            if($_.PasswordLastSet -ne $null) {
+
+                # find the difference between current time and the time the hash was last refreshed
+                $diff = (Get-Date) - ($_.PasswordLastSet)
+
+                if($diff.TotalDays -gt $limit) {
+                    Write-Output ("{0} {1}" -f $_.SamAccountName, [int]$diff.TotalDays)
+                }
+            }
+        }
+    }
+}
