@@ -96,14 +96,14 @@ To use one of the commands:
 ## A PtH Mitigation for SmartCard enabled Accounts 
 The NTLM hash associated with smartcard logins is independent of the PIN. This leads to a very long lifetime for smartcard hashes, unlike passwords which tend to change every 60-180 days depending on enterprise policies. 
 
-To combat this behavior of long lived smartcard hashes, run the **Invoke-SmartcardHashRefresh** command which generates a new hash by toggling the SmartcardLogonRequired option in Active Directory. It is recommended to run this script with the same frequency as specified by the enterprise's password policy. 
+To mitigate long lived smartcard hashes, run the **Invoke-SmartcardHashRefresh** command which generates a new hash by toggling the SmartcardLogonRequired option in Active Directory. It is recommended to run this script with the same frequency as specified by the enterprise's password policy. It may take a few minutes for replication of the new hash to all domain controllers. 
 
-Refreshing the hashes will not generally impact users unless they are currently logged in and performing Single Sign On operations. In which case their account might get locked out due to repeated authentication failures. It may take a few minutes for replication of the new hash to all domain controllers. 
+Refreshing the hashes will not generally impact users unless they are currently logged in and performing Single Sign On operations (e.g. authenticating to Exchange when using Outlook, accessing file shares, etc) and the **-Evict** option is used for Invoke-SmartcardHashRefresh. In this case the account will get locked out due to repeated authentication failures. 
 
 After running **Invoke-SmartcardHashRefresh**, the **Find-OldSmartcardHash** command can help validate that no long lived hashes remain within the enterprise.
 
 ## About the other modules
-The other modules (e.g. **mulithreading**, **Password**, and **Windows**) are support modules for performing various actions on Windows-based domain and standalone systems. These modules provide functionality used to build the main commands in the PtHTools modules. Some of the other modules (e.g. **Assert** and **regression**) are used for testing.
+The other modules (e.g. **multithreading**, **Password**, and **Windows**) are support modules for performing various actions on Windows-based domain and standalone systems. These modules provide functionality used to build the main commands in the PtHTools modules. Some of the other modules (e.g. **Assert** and **regression**) are used for testing.
 
 One problem that occurs stems from the bottleneck of Windows network timeouts. If you are running a task across every system on the network and the current system being processed is turned off or unreachable, then the processing of the next system has to wait until the current task times out which introduces significant delay. Another problem that occurs is that PowerShell's built-in concurrency model is process-based and starting a new process for each system on the network does not scale on large networks. The [multithreading module](./../multithreading/) provides a solution to both these problems.
 
