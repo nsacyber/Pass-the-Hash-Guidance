@@ -10,7 +10,8 @@ The [PtHTools](./PtHTools/) module contains the main commands for helping with i
 * Edit-AllLocalAccountPasswords 
 * Get-LocalAccountSummaryOnDomain 
 * Invoke-SmartcardHashRefresh 
- 
+* Find-OldSmartcardHash
+
 See the [PtHTools readme file](./PtHTools/README.md) for more information on how to use them.
 
 ## Microsoft guidance
