@@ -14,6 +14,11 @@ The [PtHTools](./PtHTools/) module contains the main commands for helping with i
 
 See the [PtHTools readme file](./PtHTools/README.md) for more information on how to use them.
 
+## Guidance
+
+[Reducing the Effectiveness of Pass the Hash](https://www.iad.gov/iad/library/ia-guidance/security-configuration/applications/reducing-the-effectiveness-of-pass-the-hash.cfm)
+[Long-Lived Hashes for AD Smartcard Required Accounts](https://www.iad.gov/iad/library/ia-advisories-alerts/long-lived-hashes-for-ad-smartcard-required-accounts.cfm)
+
 ## Microsoft guidance
 * https://aka.ms/pth - Microsoft's Pass-the-Hash general resource page.
 * [Mitigating Pass-the-Hash and Other Credential Theft v1](http://download.microsoft.com/download/7/7/A/77ABC5BD-8320-41AF-863C-6ECFB10CB4B9/Mitigating%20Pass-the-Hash%20(PtH)%20Attacks%20and%20Other%20Credential%20Theft%20Techniques_English.pdf)
