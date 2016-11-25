@@ -16,8 +16,8 @@ See the [PtHTools readme file](./PtHTools/README.md) for more information on how
 
 ## Guidance
 
-[Reducing the Effectiveness of Pass the Hash](https://www.iad.gov/iad/library/ia-guidance/security-configuration/applications/reducing-the-effectiveness-of-pass-the-hash.cfm)
-[Long-Lived Hashes for AD Smartcard Required Accounts](https://www.iad.gov/iad/library/ia-advisories-alerts/long-lived-hashes-for-ad-smartcard-required-accounts.cfm)
+* [Reducing the Effectiveness of Pass the Hash](https://www.iad.gov/iad/library/ia-guidance/security-configuration/applications/reducing-the-effectiveness-of-pass-the-hash.cfm)
+* [Long-Lived Hashes for AD Smartcard Required Accounts](https://www.iad.gov/iad/library/ia-advisories-alerts/long-lived-hashes-for-ad-smartcard-required-accounts.cfm)
 
 ## Microsoft guidance
 * https://aka.ms/pth - Microsoft's Pass-the-Hash general resource page.
